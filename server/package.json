@@ -4,11 +4,14 @@
   "private": true,
   "description": "Rewind LLM proxy, REST API, replay engine and CLI",
   "type": "module",
+  "bin": {
+    "rewind": "bin/rewind.js"
+  },
   "scripts": {
     "dev": "node --watch --env-file-if-exists=../.env src/index.js",
     "start": "node --env-file-if-exists=../.env src/index.js",
     "migrate": "node --env-file-if-exists=../.env src/migrate.js",
-    "test": "node --env-file-if-exists=../.env --test"
+    "test": "node --env-file-if-exists=../.env --test \"test/*.test.js\""
   },
   "dependencies": {
     "express": "^5.3.0",

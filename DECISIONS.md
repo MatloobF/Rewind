@@ -169,3 +169,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** These are the ones that change the result. `authorization` is needed when the upstream is a paid API. `host` and `content-length` are set by `fetch`. The OpenAI SDK's `x-stainless-*` headers are telemetry.
 
 **Rejected:** Forwarding every header. Hop-by-hop headers like `connection` and a stale `host` can break the upstream request.
+
+## `rewind run` talks only to the API, and passes the agent's exit code through
+
+**Decision:** The CLI creates the run with `POST /api/runs`, spawns the agent with `REWIND_RUN_ID` and `REWIND_BASE_URL=<server>/r/<id>/v1` added to its environment, then sets the status with `PATCH /api/runs/:id`. It exits with the agent's own exit code (130 after Ctrl+C), and its `[rewind]` messages go to stderr.
+
+**Why:** Rule 3: the server is the only writer, so the CLI needs no database credentials. Passing the exit code and keeping stdout clean means `rewind run -- <cmd>` can replace `<cmd>` in a script without changing what that script sees. If the server is down, the CLI stops before starting the agent rather than running it unrecorded.
+
+**Rejected:** Writing runs straight to Postgres from the CLI, and running the agent anyway when the server is unreachable (you'd think it was recorded when it wasn't).
+
+## The command must start with a real executable
+
+**Decision:** `spawn(argv[0], argv.slice(1))` with no shell, as for forks. On Windows that means `node ...`, not `npm run ...` (`npm` is a `.cmd` wrapper, and Node won't run those without a shell).
+
+**Why:** It's the same rule as storing argv instead of a command string: no shell means no quoting problems and no injection. A test passes `say "hi" & echo pwned` as an argument and checks it arrives unchanged.
+
+**Rejected:** `shell: true` on Windows to allow `.cmd` files. It brings back the quoting and injection problems that argv storage was chosen to avoid.
