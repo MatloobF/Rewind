@@ -129,3 +129,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** `JSON.stringify` writes keys in the order the object was built, so two equal requests can produce different strings. Array order is kept because order in `messages` and `tools` changes what the model sees. The function is about 15 lines and fully covered by tests.
 
 **Rejected:** A canonicalization package (e.g. RFC 8785 / JCS). It's more than we need and one more dependency.
+
+## A step can be finished only once
+
+**Decision:** `PATCH /api/runs/:id/steps/:idx` only updates a step whose `response` and `error` are both still NULL. A second finish gets `409 Conflict`. Starting a step on a run that is no longer `running` is also a `409`.
+
+**Why:** A finished step is a historical record that replay will read. If a retry or a bug could overwrite it, a fork could replay a response the original run never saw. Refusing steps on finished runs catches a proxy that keeps writing after the CLI marked the run done.
+
+**Rejected:** Letting the last PATCH win. It's simpler, but it silently rewrites history.
+
+## Integration tests use the real Postgres
+
+**Decision:** `server/test/api.test.js` starts the Express app on a random port and talks to the Docker Postgres. Test runs are named `api-test` and deleted afterwards.
+
+**Why:** The thing most worth testing, the `FOR UPDATE` lock that keeps `idx` unique, only exists in a real database. A test that starts 20 steps at once fails with a duplicate-key error when the lock is removed, and passes with it.
+
+**Rejected:** Mocking `pg`. The mock would just repeat our assumptions about locking, not check them.

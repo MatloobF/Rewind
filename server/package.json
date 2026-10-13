@@ -5,8 +5,10 @@
   "description": "Rewind LLM proxy, REST API, replay engine and CLI",
   "type": "module",
   "scripts": {
+    "dev": "node --watch --env-file-if-exists=../.env src/index.js",
+    "start": "node --env-file-if-exists=../.env src/index.js",
     "migrate": "node --env-file-if-exists=../.env src/migrate.js",
-    "test": "node --test"
+    "test": "node --env-file-if-exists=../.env --test"
   },
   "dependencies": {
     "express": "^5.3.0",
