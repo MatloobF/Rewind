@@ -67,7 +67,10 @@ ollama serve                                          # start local LLM (if not 
 cd server && npm run dev                              # proxy + API
 cd web && npm run dev                                 # frontend
 cd intel && uvicorn main:app --reload --port 8000     # Python service
-node examples/agent/index.js "sort the files"         # run the sample agent directly
+cd examples/agent && npm install                      # sample agent deps (openai SDK)
+cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files
+cd examples/agent && npm test                         # sample agent tests (safePath, tools, seed, loop)
+node examples/agent/index.js "sort the files"         # run the sample agent directly (~3 min on CPU)
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run (CLI, Phase 2+)
 ```
 
@@ -143,7 +146,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 Work in this order. Each phase should leave the project in a working state.
 
 - [x] **Phase 0:** Setup (repo structure, Docker Postgres, Ollama)
-- [ ] **Phase 1:** Sample file-organizer agent (agent loop, 4 tools, sandbox)
+- [x] **Phase 1:** Sample file-organizer agent (agent loop, 4 tools, sandbox)
 - [ ] **Phase 2:** LLM recording proxy, schema, `rewind run` CLI (non-streaming first)
 - [ ] **Phase 3:** REST API (`/api/runs`, `/api/runs/:id`, `/api/runs/:id/tree` via recursive CTE) + React run list and timeline
 - [ ] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
