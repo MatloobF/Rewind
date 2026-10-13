@@ -163,7 +163,7 @@ Work in this order. Each phase should leave the project in a working state.
 
 - [x] **Phase 0:** Setup (repo structure, Docker Postgres, Ollama)
 - [x] **Phase 1:** Sample file-organizer agent (agent loop, 4 tools, sandbox)
-- [ ] **Phase 2:** LLM recording proxy, schema, `rewind run` CLI (non-streaming first)
+- [x] **Phase 2:** LLM recording proxy, schema, `rewind run` CLI (non-streaming first)
 - [ ] **Phase 3:** REST API (`/api/runs`, `/api/runs/:id`, `/api/runs/:id/tree` via recursive CTE) + React run list and timeline
 - [ ] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
 - [ ] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
