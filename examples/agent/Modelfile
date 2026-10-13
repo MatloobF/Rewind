@@ -1,0 +1,5 @@
+# qwen2.5:7b with a bigger context window. Ollama's default is 4096 tokens,
+# and past that it silently drops the oldest messages, system prompt included.
+# Build once: ollama create rewind-qwen -f examples/agent/Modelfile
+FROM qwen2.5:7b
+PARAMETER num_ctx 16384

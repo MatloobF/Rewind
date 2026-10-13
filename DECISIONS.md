@@ -57,3 +57,59 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** The cap is a hard stop against infinite loops. qwen2.5 often asks for many tool calls in one response (13 in the first real run), and running them one by one keeps the "sequential agent" assumption that `idx` depends on.
 
 **Rejected:** Running tool calls in parallel (it breaks the `idx` order), and a cap of 15 (too tight if the model makes one tool call per response).
+
+## Steps are recorded in two calls: start, then finish
+
+**Decision:** A proxy first calls `POST /api/runs/:id/steps` with the request. The server locks the run, assigns `idx`, saves the request, and answers with a mode: `live`, `replay` (with the recorded response), or `override`. After a live call, the proxy sends the result with `PATCH /api/runs/:id/steps/:idx`.
+
+**Why:** Replay has to know a step's `idx` *before* the call, to decide whether to call at all. Only the server assigns `idx`, so the server has to be asked first. As a bonus, every replay rule lives in one place (the server) and both proxies just follow the mode they're given.
+
+**Rejected:** Posting the whole step after the call (the original plan). That works for recording, but Phase 5 would need a separate "should I replay?" call, and that check could race with the write.
+
+## Lock the run row before assigning `idx`
+
+**Decision:** The start-step transaction runs `SELECT ... FROM runs WHERE id = $1 FOR UPDATE` before computing `COALESCE(MAX(idx), -1) + 1`.
+
+**Why:** The LLM proxy and the MCP proxy write to the same run. Without the lock, two requests at the same moment could both read the same `MAX(idx)` and one insert would fail on `UNIQUE (run_id, idx)`. With it, the second one waits.
+
+**Rejected:** Retrying on a unique-constraint error (more code, harder to reason about), and Postgres advisory locks (work, but less obvious than locking the row the steps belong to).
+
+## Store the agent command as an argv array, not a string
+
+**Decision:** `runs.command` is a JSONB array like `["node", "examples/agent/index.js", "sort the files"]`, plus `runs.cwd`. Forks and evals re-launch it with `spawn(argv[0], argv.slice(1), { cwd })` and no shell.
+
+**Why:** A command string has to be re-parsed by a shell, and quoting rules differ between PowerShell and bash. A task containing quotes or spaces could break, and a crafted one could inject extra commands. An argv array goes straight to the program. `cwd` matters because relative paths in the command only work from the original folder.
+
+**Rejected:** `command TEXT` run through a shell.
+
+## Hash everything except transport fields
+
+**Decision:** `hashRequest()` drops only `stream` and `stream_options` before hashing.
+
+**Why:** Those change how the response is delivered, not what the model is asked. Everything else, including `model` and `temperature`, changes the answer, so a change there should count as a different request.
+
+**Rejected:** Also dropping `model`/`temperature`. A fork that switches models would then wrongly match the parent's recorded steps.
+
+## Ctrl+C marks a run failed; hard kills are accepted
+
+**Decision:** `rewind run` catches SIGINT/SIGTERM, stops the agent, and sets the run to `failed`. If the CLI is killed hard (terminal closed, Task Manager), the run can stay `running`.
+
+**Why:** It covers the common case with a few lines of code. Unfinished steps keep `response` NULL, which honestly shows where the agent died.
+
+**Rejected:** A server timer that marks quiet runs `failed`. On CPU-only Ollama one LLM call can take minutes, so a timeout would misjudge slow runs as dead. It can be added later if stuck runs become a real problem.
+
+## Bigger Ollama context through a committed Modelfile
+
+**Decision:** `examples/agent/Modelfile` builds `rewind-qwen` (`qwen2.5:7b` with `num_ctx 16384`), and the agent uses that model.
+
+**Why:** Ollama's default context is 4096 tokens. Past that it silently drops the oldest messages, including the system prompt, so the agent would forget its instructions with no error. Recorded runs would then be misleading. A Modelfile in the repo means anyone cloning gets the same setting.
+
+**Rejected:** Setting `OLLAMA_CONTEXT_LENGTH` on `ollama serve`. It works, but it's machine setup outside the repo and easy to forget. The OpenAI-compatible API has no `num_ctx` request option.
+
+## Split the last phase in two
+
+**Decision:** Phase 9 is streaming plus the Anthropic `/v1/messages` route. Phase 10 is Docker, deploy, README and demo.
+
+**Why:** Streaming changes how the proxy records responses and is real engineering. Packaging and docs are a different kind of work. Each phase should end in a working state, and one phase holding both was too big.
+
+**Rejected:** Keeping one large Phase 9.

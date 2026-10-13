@@ -47,7 +47,7 @@ rewind/
 - **React** via Vite, Tailwind, `@tanstack/react-query`, `@xyflow/react` (branch graph), `recharts`, `@monaco-editor/react` (fork editor)
 - **Python** 3.11+, FastAPI, uvicorn, `psycopg`, `sentence-transformers` (`all-MiniLM-L6-v2`), scikit-learn (`HDBSCAN`)
 - **PostgreSQL 16** in Docker
-- **LLM (dev):** Ollama locally, model `qwen2.5:7b`, via the OpenAI-compatible API. Must stay free to run.
+- **LLM (dev):** Ollama locally, model `rewind-qwen` (= `qwen2.5:7b` with a 16k context, built from `examples/agent/Modelfile`), via the OpenAI-compatible API. Must stay free to run.
 
 ## Local ports
 
@@ -64,6 +64,7 @@ rewind/
 ```bash
 docker compose up -d                                  # start Postgres
 ollama serve                                          # start local LLM (if not already running)
+ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
 cd server && npm run dev                              # proxy + API
 cd web && npm run dev                                 # frontend
 cd intel && uvicorn main:app --reload --port 8000     # Python service
@@ -92,7 +93,7 @@ Never commit real API keys. Keep secrets in `.env` (gitignored) and document eve
 Core tables below. Keep it this small unless there is a strong reason to split.
 
 - **`runs`**
-  - `id` (UUID), `name`, `command` (TEXT: the exact command used to start the agent, so forks and evals can re-launch it)
+  - `id` (UUID), `name`, `command` (JSONB argv array, e.g. `["node", "examples/agent/index.js", "sort the files"]`), `cwd` (TEXT). Forks and evals re-launch with `spawn(argv[0], argv.slice(1), { cwd })`, never through a shell.
   - `status` (`running | success | failed`)
   - `parent_run_id` (fork parent, NULL for originals), `fork_step` (`idx` of the overridden step), `fork_override` (JSONB)
   - `diverged_at_step` (INT, NULL if replay never diverged). Divergence is separate from `status` because a diverged run can still succeed or fail.
@@ -100,8 +101,9 @@ Core tables below. Keep it this small unless there is a strong reason to split.
 - **`steps`**
   - `id`, `run_id`, `idx`, `type` (`llm | tool`), `request` (JSONB), `response` (JSONB), `request_hash`, `latency_ms`, `tokens_in`, `tokens_out`, `error`
   - `replayed` (BOOLEAN, default false): true when the response was served from the parent run instead of a live call
+  - `response` is NULL while a live call is in progress (step started, not finished). A step left NULL means the agent died mid-call.
   - `UNIQUE (run_id, idx)`
-- **`evals`** (Phase 7): `id`, `source_run_id`, `input_task`, `command`, `assertions` (JSONB), `created_at`
+- **`evals`** (Phase 7): `id`, `source_run_id`, `input_task`, `command` (JSONB argv), `cwd`, `assertions` (JSONB), `created_at`
 - **`eval_results`** (Phase 7): `id`, `eval_id`, `run_id`, `passed` (BOOLEAN), `failures` (JSONB: which assertions failed and why), `created_at`
 
 Indexes: `steps (run_id, idx)`, `runs (parent_run_id)`, `eval_results (eval_id, created_at)`. Add a GIN index on JSONB columns only if queries need it.
@@ -111,15 +113,25 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 ### Step numbering and hashing
 
 - **`idx` is 0-based** and shared by LLM and tool steps in one run.
-- **Only the Rewind server assigns `idx`**, inside a transaction (next `idx` = `COALESCE(MAX(idx), -1) + 1` for that run). Nothing else computes or writes `idx`.
-- **`request_hash`** = SHA-256 of a **canonical JSON** of the request: keys sorted recursively, with transport-only fields removed (e.g. `stream`). Plain `JSON.stringify` is not allowed for hashing because key order is not guaranteed. Use one shared `hashRequest()` function everywhere.
+- **Only the Rewind server assigns `idx`**, inside a transaction that first locks the run row (`SELECT ... FROM runs WHERE id = $1 FOR UPDATE`), then takes next `idx` = `COALESCE(MAX(idx), -1) + 1` for that run. The lock stops the LLM and MCP proxies from getting the same `idx`. Nothing else computes or writes `idx`.
+- **`idx` is assigned when a step starts, before the live call** (see "Step recording" below), so the server can decide replay vs. live for that `idx`.
+- **`request_hash`** = SHA-256 of a **canonical JSON** of the request: keys sorted recursively, with only transport fields removed (`stream`, `stream_options`). Everything else, including `model` and `temperature`, stays in the hash. Plain `JSON.stringify` is not allowed for hashing because key order is not guaranteed. Use one shared `hashRequest()` function everywhere.
 
 ## API surface (grows by phase)
 
 - `POST /r/:runId/v1/chat/completions`: LLM proxy (Phase 2)
 - `POST /api/runs`: create a run (used by the CLI)
-- `PATCH /api/runs/:id`: update status when the agent exits
-- `POST /api/runs/:id/steps`: record a step (used by the MCP proxy for tool steps)
+- `PATCH /api/runs/:id`: update status when the agent exits (or when the CLI catches Ctrl+C: `failed`)
+- `POST /api/runs/:id/steps`: **start** a step. Body `{ type, request }`. Server assigns `idx`, saves the request, returns `{ idx, mode, response? }`
+- `PATCH /api/runs/:id/steps/:idx`: **finish** a live step with `{ response, error, latency_ms, tokens_in, tokens_out }`
+
+### Step recording (start + finish)
+
+1. The proxy starts the step. The server locks the run, assigns `idx`, inserts the row (`response` NULL) and returns a `mode`:
+   - `live`: make the real call, then PATCH the result. (Phase 2–4: always `live`.)
+   - `replay` (Phase 5): the row is already complete with the parent's response and `replayed = true`. Return `response` to the agent, make no call, don't PATCH.
+   - `override` (Phase 5): apply `fork_override` as Rule 6 says.
+2. All replay decisions are made in the server, in one place. The MCP proxy uses these two HTTP routes. The LLM proxy lives in the server, so it calls the same functions directly.
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
 - `POST /api/runs/:id/fork`: create a fork run and re-launch the agent (Phase 5)
 
@@ -127,10 +139,10 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 
 1. **Run ID lives in the URL.** The LLM proxy route is `/r/:runId/v1/...`, so any agent can be recorded by changing only its base URL.
 2. **The proxy is transparent.** It forwards requests unchanged and returns upstream responses unchanged (including status codes). Recording must never alter agent behavior in record mode.
-3. **One step sequence per run, one owner of writes.** LLM and tool steps share `idx`. The MCP proxy records tool steps through `POST /api/runs/:id/steps`, never by writing to the DB directly. The Python service reads Postgres **read-only**; any writes go through the Node API.
+3. **One step sequence per run, one owner of writes.** LLM and tool steps share `idx`. The MCP proxy records tool steps through the start/finish step routes, never by writing to the DB directly. The Python service reads Postgres **read-only**; any writes go through the Node API.
 4. **Never `console.log` in stdio MCP servers.** Stdout carries the MCP protocol. Log with `console.error`.
 5. **Record MCP tool errors.** Tools often return `isError: true` instead of throwing; set the `error` column in that case too.
-6. **Replay rules (Phase 5),** for a fork run with `fork_step = N`, in both proxies:
+6. **Replay rules (Phase 5),** for a fork run with `fork_step = N`, decided by the server when a step starts (so both proxies behave the same):
    - `idx < N`: return the parent's recorded response for the same `idx`, record it in the fork run with `replayed = true`, and make no live call.
    - `idx = N`: apply `fork_override` (edited response, or edited request sent live).
    - `idx > N`: go live and record normally.
@@ -154,7 +166,8 @@ Work in this order. Each phase should leave the project in a working state.
 - [ ] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
 - [ ] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
 - [ ] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
-- [ ] **Phase 9:** Streaming support, Anthropic `/v1/messages` route, Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.)
+- [ ] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
+- [ ] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.)
 
 Tick boxes as phases are completed.
 

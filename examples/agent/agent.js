@@ -2,7 +2,8 @@ import OpenAI from 'openai';
 import { toolDefinitions, runTool } from './tools.js';
 import { SANDBOX_DIR } from './safePath.js';
 
-export const MODEL = 'qwen2.5:7b';
+// qwen2.5:7b with a 16k context, built from ./Modelfile.
+export const MODEL = 'rewind-qwen';
 
 // Hard cap on LLM calls per run, so a confused model can't loop forever.
 // Sorting the seed files takes ~20 tool calls, so 25 leaves a little room.
