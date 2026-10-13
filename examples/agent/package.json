@@ -5,7 +5,8 @@
   "description": "Sample file-organizer agent used to test Rewind",
   "type": "module",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "seed": "node seed.js"
   },
   "dependencies": {
     "openai": "^7.32.0"
