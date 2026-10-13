@@ -65,6 +65,9 @@ rewind/
 docker compose up -d                                  # start Postgres
 ollama serve                                          # start local LLM (if not already running)
 ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
+cd server && npm install                              # server deps (express, pg)
+cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run)
+cd server && npm test                                 # server tests (hashRequest, ...)
 cd server && npm run dev                              # proxy + API
 cd web && npm run dev                                 # frontend
 cd intel && uvicorn main:app --reload --port 8000     # Python service

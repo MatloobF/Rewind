@@ -113,3 +113,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Streaming changes how the proxy records responses and is real engineering. Packaging and docs are a different kind of work. Each phase should end in a working state, and one phase holding both was too big.
 
 **Rejected:** Keeping one large Phase 9.
+
+## A 30-line migration runner instead of a library
+
+**Decision:** `server/src/migrate.js` applies `server/migrations/*.sql` in name order. Each file runs once, in its own transaction, and is recorded in a `schema_migrations` table. Run it with `npm run migrate`.
+
+**Why:** Plain SQL files are easy to read and review, and the runner is short enough to explain line by line. Running each file in a transaction means a broken migration leaves no half-applied schema.
+
+**Rejected:** `node-pg-migrate` or an ORM's migrations. They add a dependency and their own file format, for features (down migrations, JS migrations) this project doesn't need yet.
+
+## Canonical JSON is hand-written, not a library
+
+**Decision:** `canonicalJson()` in `server/src/hash.js` sorts object keys at every level and keeps array order. `hashRequest()` hashes its output with SHA-256.
+
+**Why:** `JSON.stringify` writes keys in the order the object was built, so two equal requests can produce different strings. Array order is kept because order in `messages` and `tools` changes what the model sees. The function is about 15 lines and fully covered by tests.
+
+**Rejected:** A canonicalization package (e.g. RFC 8785 / JCS). It's more than we need and one more dependency.
