@@ -145,3 +145,27 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** The thing most worth testing, the `FOR UPDATE` lock that keeps `idx` unique, only exists in a real database. A test that starts 20 steps at once fails with a duplicate-key error when the lock is removed, and passes with it.
 
 **Rejected:** Mocking `pg`. The mock would just repeat our assumptions about locking, not check them.
+
+## The proxy forwards raw bytes, and parses a copy to record
+
+**Decision:** The `/r` route reads the request body as raw bytes and sends exactly those bytes upstream. It parses a separate copy for the `steps.request` column. The upstream status, content type and body bytes go back to the agent unchanged, error statuses included.
+
+**Why:** Rule 2 says recording must never change what the agent sends or gets. Parsing and re-serializing could change key order, whitespace or number formatting. The stored copy is only for recording and hashing, and `hashRequest` doesn't care about key order.
+
+**Rejected:** Using `express.json()` and forwarding `JSON.stringify(req.body)`. It's simpler, but it isn't byte-for-byte transparent.
+
+## How the proxy records failures
+
+**Decision:** An upstream error status (e.g. 404 for an unknown model) is passed through and saved with `error = "upstream HTTP <status>: <message>"`, keeping the error body in `response`. If the upstream can't be reached, the agent gets a `502 { error }` and the step is saved with only `error`. A `stream: true` request is refused with a 400 before any step is created.
+
+**Why:** Failed calls are exactly what a debugger needs to show, so they are steps too. Refusing streaming outright is clearer than half-recording a stream; streaming is Phase 9.
+
+**Rejected:** Not recording failed calls, which would hide the moment a run went wrong.
+
+## Only a few headers are forwarded
+
+**Decision:** The proxy forwards `content-type`, `accept` and `authorization` to the upstream.
+
+**Why:** These are the ones that change the result. `authorization` is needed when the upstream is a paid API. `host` and `content-length` are set by `fetch`. The OpenAI SDK's `x-stainless-*` headers are telemetry.
+
+**Rejected:** Forwarding every header. Hop-by-hop headers like `connection` and a stale `host` can break the upstream request.

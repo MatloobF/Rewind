@@ -4,17 +4,15 @@ import { Router } from 'express';
 import { badRequest } from './errors.js';
 import { createRun, setRunStatus } from './runs.js';
 import { startStep, finishStep } from './steps.js';
+import { isUuid, isPlainObject } from './validate.js';
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FINAL_STATUSES = ['success', 'failed'];
 const STEP_TYPES = ['llm', 'tool'];
 
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const isCount = (v) => v == null || (Number.isInteger(v) && v >= 0);
 
-// Checking the id shape first gives a 400 instead of a Postgres cast error (500).
 function runIdParam(req) {
-  if (!UUID.test(req.params.id)) throw badRequest('run id must be a UUID');
+  if (!isUuid(req.params.id)) throw badRequest('run id must be a UUID');
   return req.params.id;
 }
 
