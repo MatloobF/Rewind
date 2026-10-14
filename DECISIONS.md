@@ -331,3 +331,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Rejected:** Bundling `monaco-editor` locally. That works offline, but it needs worker imports and makes the bundle several MB bigger, and it can be switched later through `loader.config({ monaco })`. Also rejected: a plain command-line text box for setup (it would need splitting on spaces, which brings back quoting problems) and a modal dialog (the inline panel keeps the step's recorded data visible below the editor).
 
 **Note:** `npm audit` reports two low-severity advisories for `dompurify`, which `monaco-editor` pins exactly. That local copy is only installed as a peer dependency. The browser loads Monaco from the CDN, so it never reaches the page.
+
+## The branch graph uses a hand-written row-per-run layout, with fork details in the nodes
+
+**Decision:** The run page shows a "Fork tree" graph (React Flow) whenever the run has a parent or forks. `web/src/tree.js` turns the flat `/tree` list into nodes and edges. A depth-first walk from the root gives each run its own row, and the fork depth sets the column, as in `git log --graph`. Each node shows the status, name, short id, "diverged at N" when it applies, and for a fork, "fork at step N · edited response/request". The current run is highlighted, and clicking a node opens that run. The graph is read-only (no dragging or selecting), and scroll-to-zoom is off so the page scrolls normally over it. It polls while any run in the tree is recording.
+
+**Why:** Fork trees are small and shaped like trees, so about 15 lines of layout are enough, with no layout library to learn or explain. Putting the fork details in the node and not on the edge avoids sibling labels piling up where the edges leave the parent, which happened in the first version. A read-only graph matches what it's for: seeing where runs branched and moving between them.
+
+**Rejected:** `dagre` or `elkjs` for automatic layout (a dependency for a problem a simple depth-first walk already solves), labels on the edges (they overlapped), and hiding React Flow's attribution (its maintainers ask that it stay unless you sponsor the project).

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { fetchRun } from '../api.js';
+import BranchGraph from '../components/BranchGraph.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import StepDetail from '../components/StepDetail.jsx';
 import StepList from '../components/StepList.jsx';
@@ -55,6 +56,8 @@ export default function RunPage() {
         {formatDate(run.created_at)} · {steps.length} steps · {formatNumber(sum('tokens_in'))} in /{' '}
         {formatNumber(sum('tokens_out'))} out · {formatMs(sum('latency_ms'))} call time
       </p>
+
+      <BranchGraph runId={run.id} />
 
       {steps.length === 0 ? (
         <p className="mt-6 text-zinc-400">No steps recorded yet.</p>
