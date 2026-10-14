@@ -209,3 +209,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Tailwind v4 finds class names in the source files by itself, so it needs no `tailwind.config.js` or `postcss.config.js`. That means fewer files to understand.
 
 **Rejected:** The v3 setup (PostCSS plus a config file listing the `content` paths). It's what older tutorials show, but it's no longer needed.
+
+## The run list polls only while a run is recording
+
+**Decision:** The run list query sets React Query's `refetchInterval` to 2 seconds while any run has `status = 'running'`, and turns polling off otherwise.
+
+**Why:** A recording run gets new steps and then a final status, and the list should show that without a reload. Polling is a single line of code, and an idle list makes no requests.
+
+**Rejected:** Pushing updates over WebSockets or Server-Sent Events. That's real-time, but it adds a connection to manage on the server for a local tool where a 2-second delay doesn't matter.
+
+## Routing with `react-router`
+
+**Decision:** Pages live at real URLs (`/`, `/runs/:id`) using `react-router`'s `BrowserRouter`.
+
+**Why:** Back and forward buttons work, and a run's URL can be shared or bookmarked. Later phases add more pages (diff, failures dashboard), so a hand-written router would keep growing.
+
+**Rejected:** About 15 lines of home-made routing on `location.hash`. It needs no dependency, but it means maintaining my own router.
