@@ -1,9 +1,11 @@
 import { pool } from './db.js';
-import { notFound } from './errors.js';
+import { badRequest, notFound } from './errors.js';
+import { forkOverrideError } from './validate.js';
 
 // Creates a run in 'running' status. command is an argv array.
-// A fork also passes parentRunId and forkStep (and, from Phase 5 step 2,
-// forkOverride); startStep then replays the parent up to forkStep.
+// A fork also passes parentRunId and forkStep, and usually a forkOverride;
+// startStep then replays the parent before forkStep and applies the override
+// at it. A fork with no override just replays and then goes live.
 export async function createRun({
   name = null,
   command,
@@ -12,6 +14,7 @@ export async function createRun({
   forkStep = null,
   forkOverride = null,
 }) {
+  checkForkFields({ parentRunId, forkStep, forkOverride });
   const { rows } = await pool.query(
     `INSERT INTO runs (name, command, cwd, parent_run_id, fork_step, fork_override)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -26,6 +29,24 @@ export async function createRun({
     ],
   );
   return rows[0];
+}
+
+// The fork fields come together: a parent needs a fork step, and a fork step
+// or override without a parent means nothing.
+function checkForkFields({ parentRunId, forkStep, forkOverride }) {
+  if (parentRunId == null) {
+    if (forkStep != null || forkOverride != null) {
+      throw badRequest('fork_step and fork_override need a parent run');
+    }
+    return;
+  }
+  if (!Number.isInteger(forkStep) || forkStep < 0) {
+    throw badRequest('fork_step must be a non-negative integer');
+  }
+  if (forkOverride != null) {
+    const message = forkOverrideError(forkOverride);
+    if (message) throw badRequest(message);
+  }
 }
 
 // Sets a run's final status ('success' or 'failed'), e.g. when the agent exits.

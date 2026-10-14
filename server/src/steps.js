@@ -6,21 +6,26 @@ import { hashRequest } from './hash.js';
 import { notFound, conflict } from './errors.js';
 
 // Starts a step: assigns the next idx and saves the request. Returns
-// { idx, mode } and, for mode 'replay', the parent's { response, error }.
+// { idx, mode } plus, depending on the mode:
+//   'live'      nothing: make the real call, then finishStep
+//   'replay'    { response, error } from the parent: no call, no finishStep
+//   'override'  { response }: no call, no finishStep, or
+//               { request }: send this edited request live, then finishStep
 //
 // For a fork run with fork_step = N (Rule 6):
-//   idx < N  -> 'replay': the parent's recorded result, no live call
-//   idx = N  -> 'live' for now (the override is applied in Phase 5 step 2)
+//   idx < N  -> 'replay': the parent's recorded result
+//   idx = N  -> 'override' with fork_override ('live' if there is none)
 //   idx > N  -> 'live'
 // If the request at idx <= N doesn't match the parent's, the run diverged:
-// diverged_at_step is set and every step from then on is live.
+// diverged_at_step is set, the override is skipped, and every step from then
+// on is live.
 export async function startStep(runId, { type, request }) {
   return withTransaction(async (client) => {
     // Lock the run row. A second startStep for the same run (e.g. LLM proxy
     // and MCP proxy at once) waits here until this transaction commits, so
     // both can't read the same MAX(idx), and both see the same divergence.
     const { rows: runs } = await client.query(
-      `SELECT status, parent_run_id, fork_step, diverged_at_step
+      `SELECT status, parent_run_id, fork_step, fork_override, diverged_at_step
        FROM runs WHERE id = $1 FOR UPDATE`,
       [runId],
     );
@@ -50,13 +55,32 @@ export async function startStep(runId, { type, request }) {
     }
 
     if (idx === run.fork_step) {
-      await insertStep(client, step);
-      return { idx, mode: 'live' };
+      return applyOverride(client, step, run.fork_override);
     }
 
-    await insertStep(client, step, parentStep);
+    await insertStep(client, step, { ...parentStep, replayed: true });
     return { idx, mode: 'replay', response: parentStep.response, error: parentStep.error };
   });
+}
+
+// The fork step. The agent's own request has already matched the parent's.
+//   'response': save the edited response as the finished result (not
+//               replayed: it comes from the user, not the parent).
+//   'request':  save the edited request, the one that is actually sent, so
+//               the row and its hash describe the real call.
+async function applyOverride(client, step, override) {
+  const { idx } = step;
+  if (override == null) {
+    await insertStep(client, step);
+    return { idx, mode: 'live' };
+  }
+  if (override.kind === 'response') {
+    await insertStep(client, step, { response: override.response });
+    return { idx, mode: 'override', response: override.response };
+  }
+  const edited = { ...step, request: override.request, hash: hashRequest(override.request) };
+  await insertStep(client, edited);
+  return { idx, mode: 'override', request: override.request };
 }
 
 // True while a fork run is still on its parent's path: it has a parent,
@@ -84,11 +108,11 @@ async function getStep(client, runId, idx) {
   return rows[0] ?? null;
 }
 
-// Inserts a step. Without `replayedFrom` it's a live step with response NULL.
-// With it, the row is complete: the parent's result, marked replayed.
-// latency_ms stays NULL for a replayed step because no call was made.
-async function insertStep(client, { runId, idx, type, request, hash }, replayedFrom = null) {
-  const from = replayedFrom ?? {};
+// Inserts a step. Without `result` it's a live step with response NULL, to be
+// finished later. With it, the row is complete already (a replayed or
+// overridden result). latency_ms stays NULL then, because no call was made.
+async function insertStep(client, { runId, idx, type, request, hash }, result = {}) {
+  const { response = null, error = null, tokens_in = null, tokens_out = null, replayed = false } = result;
   await client.query(
     `INSERT INTO steps
        (run_id, idx, type, request, request_hash, response, error, tokens_in, tokens_out, replayed)
@@ -99,12 +123,12 @@ async function insertStep(client, { runId, idx, type, request, hash }, replayedF
       type,
       JSON.stringify(request),
       hash,
-      // pg already parsed the parent's JSONB; stringify it back. NULL stays NULL.
-      from.response == null ? null : JSON.stringify(from.response),
-      from.error ?? null,
-      from.tokens_in ?? null,
-      from.tokens_out ?? null,
-      replayedFrom != null,
+      // pg parsed the parent's JSONB into an object; stringify it back. NULL stays NULL.
+      response == null ? null : JSON.stringify(response),
+      error,
+      tokens_in,
+      tokens_out,
+      replayed,
     ],
   );
 }

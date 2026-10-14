@@ -139,7 +139,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 1. The proxy starts the step. The server locks the run, assigns `idx`, inserts the row (`response` NULL) and returns a `mode`:
    - `live`: make the real call, then PATCH the result. (Phase 2–4: always `live`.)
    - `replay` (Phase 5): the row is already complete with the parent's response and `replayed = true`. Return `response` to the agent, make no call, don't PATCH.
-   - `override` (Phase 5): apply `fork_override` as Rule 6 says.
+   - `override` (Phase 5): apply `fork_override` as Rule 6 says. `{ kind: "response", response }` returns `{ response }` (row already finished, no call, no PATCH); `{ kind: "request", request }` returns `{ request }` to send live, then PATCH.
 2. All replay decisions are made in the server, in one place. The MCP proxy uses these two HTTP routes. The LLM proxy lives in the server, so it calls the same functions directly.
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
 - `POST /api/runs/:id/fork`: create a fork run and re-launch the agent (Phase 5)

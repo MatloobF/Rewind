@@ -289,3 +289,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Divergence state lives only in `runs.diverged_at_step`, which is read and written under the same `FOR UPDATE` lock that assigns `idx`. That keeps both proxies in agreement with no extra table. Treating "parent has nothing usable here" as divergence means the engine never makes up a response. Running the check at N stops an edited response from answering a question the agent didn't ask. Leaving `latency_ms` NULL keeps replayed steps from adding fake time to run totals.
 
 **Rejected:** Checking only the hash, which would replay a tool result to an LLM call that happened to hash the same. Also rejected: applying the override even after divergence. The agent is no longer where the parent was, so the edit would be out of context.
+
+## A fork's override is either an edited response or an edited request
+
+**Decision:** `fork_override` is `{ kind: 'response', response }` or `{ kind: 'request', request }`. At the fork step (after the agent's request has matched the parent's), a response override is saved as that step's finished result with `replayed = false`, and the proxy gets `{ mode: 'override', response }` and makes no call. A request override replaces the stored request and its hash, and the proxy gets `{ mode: 'override', request }`, sends that live, and finishes the step as usual. Changing the model or the prompt is a request override. A fork with no override replays up to the fork step, then goes live. `createRun` checks the shape and that `fork_step` and `fork_override` only come with a parent.
+
+**Why:** Two kinds cover every edit the roadmap asks for (tool result, prompt, model) without a separate case for each. A tool result is just a response. The stored request is the one actually sent, so the timeline and later forks of this fork see the real call. `replayed = false` because the edited response came from the user, not from the parent run.
+
+**Rejected:** Separate kinds like `model` or `prompt`. They'd each need their own merge logic, and they're all just an edited request. Also rejected: storing the agent's original request at the fork step, which would leave a row whose request doesn't match the call that produced its response.
