@@ -69,7 +69,8 @@ cd server && npm install                              # server deps (express, pg
 cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run)
 cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy; needs Postgres, not Ollama)
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
-cd web && npm run dev                                 # frontend
+cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
+cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000
 cd intel && uvicorn main:app --reload --port 8000     # Python service
 cd examples/agent && npm install                      # sample agent deps (openai SDK)
 cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files

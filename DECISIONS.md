@@ -193,3 +193,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Asking from any run (root, fork or fork of a fork) gives the same whole tree, so the UI can show the branch graph from any run page. A flat list maps straight to the nodes and edges the graph library wants, and Postgres doesn't build nested JSON easily.
 
 **Rejected:** Only walking down from the given run (a fork's page would miss its parent and siblings), and returning nested `children` arrays (the UI would have to flatten them again for the graph).
+
+## The web UI reaches the API through Vite's dev proxy, not CORS
+
+**Decision:** The browser only talks to Vite on :5173. `vite.config.js` forwards `/api` to the Rewind server on :4000, and the frontend fetches relative paths like `/api/runs`.
+
+**Why:** To the browser it's one origin, so the server needs no CORS headers or extra dependency. The frontend has no hard-coded server URL. In Phase 10 the server can serve the built `web/dist` itself, and the same relative paths keep working.
+
+**Rejected:** Adding the `cors` middleware to the server and fetching `http://localhost:4000` from the browser. It's one more dependency and one more setting to get wrong when deploying.
+
+## Tailwind v4 through its Vite plugin
+
+**Decision:** Tailwind is set up with `@tailwindcss/vite` and a single `@import "tailwindcss"` line in `src/index.css`.
+
+**Why:** Tailwind v4 finds class names in the source files by itself, so it needs no `tailwind.config.js` or `postcss.config.js`. That means fewer files to understand.
+
+**Rejected:** The v3 setup (PostCSS plus a config file listing the `content` paths). It's what older tutorials show, but it's no longer needed.
