@@ -5,11 +5,16 @@ import { HttpError } from './errors.js';
 
 // Real LLM endpoint, without /v1 (the proxy adds it).
 const DEFAULT_UPSTREAM = process.env.UPSTREAM_URL || 'http://localhost:11434';
+// Where agents launched by the server (forks) reach it. Not taken from the
+// request: through Vite's dev proxy that would be the :5173 address, which
+// only forwards /api, not the /r LLM route.
+const DEFAULT_SERVER_URL = process.env.REWIND_SERVER_URL || `http://localhost:${Number(process.env.PORT) || 4000}`;
 
 // Builds the Express app without listening, so tests can start it on any
 // port and point it at a fake upstream.
-export function createApp({ upstreamUrl = DEFAULT_UPSTREAM } = {}) {
+export function createApp({ upstreamUrl = DEFAULT_UPSTREAM, serverUrl = DEFAULT_SERVER_URL } = {}) {
   const app = express();
+  app.locals.serverUrl = serverUrl.replace(/\/+$/, '');
 
   // LLM requests carry the whole conversation plus tool definitions, which
   // easily passes Express's 100kb default on a long run.

@@ -24,3 +24,6 @@ export function forkOverrideError(override) {
   }
   return null;
 }
+
+// An argv array for spawn (no shell): non-empty, strings only.
+export const isArgv = (v) => Array.isArray(v) && v.length > 0 && v.every((a) => typeof a === 'string');

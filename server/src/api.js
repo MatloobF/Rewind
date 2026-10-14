@@ -2,9 +2,10 @@
 // store functions in runs.js / steps.js.
 import { Router } from 'express';
 import { badRequest } from './errors.js';
-import { createRun, setRunStatus, listRuns, getRun, getRunTree } from './runs.js';
+import { createRun, createFork, setRunStatus, listRuns, getRun, getRunTree } from './runs.js';
+import { launchRun } from './launcher.js';
 import { startStep, finishStep } from './steps.js';
-import { isUuid, isPlainObject } from './validate.js';
+import { isUuid, isPlainObject, isArgv } from './validate.js';
 
 const FINAL_STATUSES = ['success', 'failed'];
 const STEP_TYPES = ['llm', 'tool'];
@@ -37,11 +38,24 @@ api.get('/runs/:id/tree', async (req, res) => {
 api.post('/runs', async (req, res) => {
   const { name, command, cwd } = req.body ?? {};
   if (name != null && typeof name !== 'string') throw badRequest('name must be a string');
-  if (!Array.isArray(command) || command.length === 0 || !command.every((a) => typeof a === 'string')) {
-    throw badRequest('command must be a non-empty array of strings');
-  }
+  if (!isArgv(command)) throw badRequest('command must be a non-empty array of strings');
   if (typeof cwd !== 'string' || cwd === '') throw badRequest('cwd must be a non-empty string');
   res.status(201).json(await createRun({ name, command, cwd }));
+});
+
+// Fork a finished run at one of its steps and launch its agent again.
+// Body: { fork_step, fork_override?, name?, setup?: string[] } -> the new run.
+// Answers as soon as the run exists; the agent runs in the background and
+// the run's status is set when it exits.
+api.post('/runs/:id/fork', async (req, res) => {
+  const parentId = runIdParam(req);
+  const { fork_step, fork_override = null, name = null, setup = null } = req.body ?? {};
+  if (name != null && typeof name !== 'string') throw badRequest('name must be a string');
+  if (setup != null && !isArgv(setup)) throw badRequest('setup must be a non-empty array of strings');
+
+  const run = await createFork(parentId, { forkStep: fork_step, forkOverride: fork_override, name });
+  res.status(201).json(run);
+  launchRun(run, { serverUrl: req.app.locals.serverUrl, setup });
 });
 
 // Set the final status when the agent exits. Body: { status: 'success' | 'failed' }

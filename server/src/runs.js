@@ -1,5 +1,5 @@
 import { pool } from './db.js';
-import { badRequest, notFound } from './errors.js';
+import { badRequest, notFound, conflict } from './errors.js';
 import { forkOverrideError } from './validate.js';
 
 // Creates a run in 'running' status. command is an argv array.
@@ -29,6 +29,37 @@ export async function createRun({
     ],
   );
   return rows[0];
+}
+
+// Creates a fork of a finished run at one of its steps. The fork gets the
+// parent's command and cwd, so it re-launches the same agent and task.
+export async function createFork(parentId, { forkStep, forkOverride = null, name = null }) {
+  const { rows } = await pool.query(
+    `SELECT r.name, r.command, r.cwd, r.status, MAX(s.idx) AS last_idx
+     FROM runs r LEFT JOIN steps s ON s.run_id = r.id
+     WHERE r.id = $1
+     GROUP BY r.id`,
+    [parentId],
+  );
+  if (rows.length === 0) throw notFound(`run ${parentId} not found`);
+  const parent = rows[0];
+  // A running run's steps aren't final yet, so there is nothing stable to replay.
+  if (parent.status === 'running') {
+    throw conflict(`run ${parentId} is still running; fork it once it has finished`);
+  }
+  if (parent.last_idx == null) throw badRequest(`run ${parentId} has no steps to fork at`);
+  if (!Number.isInteger(forkStep) || forkStep < 0 || forkStep > parent.last_idx) {
+    throw badRequest(`fork_step must be a step of run ${parentId} (0 to ${parent.last_idx})`);
+  }
+
+  return createRun({
+    name: name ?? `${parent.name ?? 'run'} (fork at step ${forkStep})`,
+    command: parent.command,
+    cwd: parent.cwd,
+    parentRunId: parentId,
+    forkStep,
+    forkOverride,
+  });
 }
 
 // The fork fields come together: a parent needs a fork step, and a fork step

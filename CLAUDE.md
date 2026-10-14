@@ -90,8 +90,8 @@ Update this section when scripts are added or renamed.
 
 - `DATABASE_URL`: e.g. `postgres://postgres:rewind@localhost:5432/rewind`
 - `UPSTREAM_URL`: real LLM endpoint the proxy forwards to (default `http://localhost:11434`)
-- `REWIND_SERVER_URL`: Rewind server URL used by the CLI and MCP proxy (default `http://localhost:4000`)
-- `REWIND_RUN_ID`: set by the CLI for each run; used by the MCP proxy
+- `REWIND_SERVER_URL`: Rewind server URL used by the CLI and MCP proxy, and by the server itself to tell forked agents where it is (default `http://localhost:4000`)
+- `REWIND_RUN_ID`: set by the CLI (or the server, for forks) for each run; used by the MCP proxy
 - `REWIND_BASE_URL`: set by the CLI; the agent uses it as its LLM base URL
 - `INTEL_URL`: Python service URL (default `http://localhost:8000`)
 
@@ -142,7 +142,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
    - `override` (Phase 5): apply `fork_override` as Rule 6 says. `{ kind: "response", response }` returns `{ response }` (row already finished, no call, no PATCH); `{ kind: "request", request }` returns `{ request }` to send live, then PATCH.
 2. All replay decisions are made in the server, in one place. The MCP proxy uses these two HTTP routes. The LLM proxy lives in the server, so it calls the same functions directly.
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
-- `POST /api/runs/:id/fork`: create a fork run and re-launch the agent (Phase 5)
+- `POST /api/runs/:id/fork`: fork a finished run. Body `{ fork_step, fork_override?, name?, setup? }`; `setup` is an optional argv run (no shell, in the run's `cwd`) before the agent, e.g. `["node", "examples/agent/seed.js"]`. Returns 201 with the new run at once; the server launches the agent in the background and sets the status when it exits (Phase 5)
 
 ## Key design rules (do not break these)
 
