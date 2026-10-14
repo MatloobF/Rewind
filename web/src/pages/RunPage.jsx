@@ -46,7 +46,10 @@ export default function RunPage() {
           <Link to={`/runs/${run.parent_run_id}`} className="underline">
             {shortId(run.parent_run_id)}
           </Link>{' '}
-          at step {run.fork_step}
+          at step {run.fork_step} ·{' '}
+          <Link to={`/runs/${run.id}/diff`} className="underline">
+            Compare with parent &rarr;
+          </Link>
         </p>
       )}
       <p className="mt-1 font-mono text-xs text-zinc-500">

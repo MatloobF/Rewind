@@ -1,4 +1,5 @@
 import { Link, Route, Routes } from 'react-router';
+import RunDiff from './pages/RunDiff.jsx';
 import RunList from './pages/RunList.jsx';
 import RunPage from './pages/RunPage.jsx';
 
@@ -16,6 +17,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<RunList />} />
           <Route path="/runs/:id" element={<RunPage />} />
+          <Route path="/runs/:id/diff" element={<RunDiff />} />
           <Route path="*" element={<p className="text-zinc-400">Page not found.</p>} />
         </Routes>
       </main>

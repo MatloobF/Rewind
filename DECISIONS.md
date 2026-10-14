@@ -339,3 +339,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Fork trees are small and shaped like trees, so about 15 lines of layout are enough, with no layout library to learn or explain. Putting the fork details in the node and not on the edge avoids sibling labels piling up where the edges leave the parent, which happened in the first version. A read-only graph matches what it's for: seeing where runs branched and moving between them.
 
 **Rejected:** `dagre` or `elkjs` for automatic layout (a dependency for a problem a simple depth-first walk already solves), labels on the edges (they overlapped), and hiding React Flow's attribution (its maintainers ask that it stay unless you sponsor the project).
+
+## The run diff lines up steps by idx, and labels each row from the recorded data
+
+**Decision:** `/runs/:id/diff` shows a fork next to its parent, one row per `idx`. `web/src/diff.js` gives each row a kind, checked in this order: the fork step, the step where the run diverged, a replayed step, then for live steps "same request" or "new request" by comparing `request_hash`, and "parent only" / "fork only" once one run has ended. "Replayed" comes from the step's `replayed` flag, not from `idx < fork_step`. Clicking a row shows both responses side by side, plus both requests on rows where the requests differ. The run page links to the diff from a fork's "Fork of …" line. The web app now has `npm test` (Node's built-in runner, no new dependency) for this pure logic.
+
+**Why:** A fork reuses its parent's step numbers by design, so the same `idx` really is the same point in the run, and lining up by idx is the honest comparison. Reading the `replayed` flag keeps the page right when a fork diverged before its fork step and went live early. Comparing hashes after the fork shows how far an edit spread: in fork 9aaa4c86, every step after the edited `list_files` result sent a new request, because each LLM request carries the conversation so far.
+
+**Rejected:** An LCS-style match (like `diff`) that pairs steps by content. It could pair steps from different points in the run and hide where the fork changed things. It would also need a library or a bigger algorithm to explain. Also rejected: a text diff of the JSON inside each row. Showing both sides is enough for now and needs no dependency.
