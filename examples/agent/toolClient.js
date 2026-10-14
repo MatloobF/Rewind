@@ -10,15 +10,30 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { toolDefinitions, runTool } from './tools.js';
 
 export const MCP_SERVER_PATH = fileURLToPath(new URL('./mcp-server.js', import.meta.url));
+export const MCP_PROXY_PATH = fileURLToPath(new URL('../../mcp-proxy/index.js', import.meta.url));
 
-// Launches the file-tools MCP server over stdio and connects to it.
+// Launches the file-tools MCP server behind Rewind's MCP proxy and connects:
+//   agent -> mcp-proxy -> mcp-server.js
+// Without REWIND_RUN_ID (not started by `rewind run`) the proxy just passes
+// calls through, so the agent works the same with or without Rewind.
 export async function connectMcpTools() {
   const client = new Client({ name: 'rewind-sample-agent', version: '0.1.0' });
   await client.connect(new StdioClientTransport({
     command: process.execPath, // the same node binary running the agent
-    args: [MCP_SERVER_PATH],
+    args: [MCP_PROXY_PATH, '--', process.execPath, MCP_SERVER_PATH],
+    env: rewindEnv(),
   }));
   return mcpTools(client);
+}
+
+// The SDK passes only a few "safe" variables to the process it launches,
+// so the ones the proxy needs to record the run are passed explicitly.
+function rewindEnv() {
+  const env = {};
+  for (const key of ['REWIND_RUN_ID', 'REWIND_SERVER_URL']) {
+    if (process.env[key]) env[key] = process.env[key];
+  }
+  return env;
 }
 
 // Wraps an already connected MCP client.

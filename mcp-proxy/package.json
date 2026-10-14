@@ -1,0 +1,13 @@
+{
+  "name": "rewind-mcp-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP proxy that wraps a real MCP server and records its tool calls in Rewind",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  }
+}

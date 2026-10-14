@@ -257,3 +257,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** A test checks that moving to MCP didn't change a single byte of the LLM requests. That matters because replay matches requests by hash. The agent loop doesn't need to know about MCP, and its tests stay fast with no subprocesses. `tools` is required rather than defaulting to in-process tools, so the real agent can't quietly skip MCP (and later the recording proxy).
 
 **Rejected:** Having the agent call the MCP `Client` directly inside the loop, which would force every agent test to start a server. Also rejected: a default of in-process tools, which would be a hidden second path around the proxy.
+
+## The MCP proxy is an SDK `Server` in front of an SDK `Client`, and forwards only tools
+
+**Decision:** `mcp-proxy` acts as an MCP server to the agent and as an MCP client to the real server (`node mcp-proxy/index.js -- <server argv>`). It forwards `tools/list` and `tools/call` and returns results unchanged, `isError` results included. Protocol errors keep their code, message and data. The SDK adds an `MCP error <code>: ` prefix to the message, and the proxy strips it once so the agent doesn't see it twice. The real server gets the proxy's whole environment and its stderr. When the agent closes the proxy's stdin, the proxy closes the real server the same way and exits.
+
+**Why:** Recording needs to pair each tool call with its result, and the SDK already does that pairing. The proxy is about 40 lines that are easy to read, and tool calls are what Rewind records. Tests compare the same calls direct and through the proxy, to keep it transparent (Rule 2).
+
+**Rejected:** Relaying raw JSON-RPC lines between the two pipes. It forwards everything (resources, prompts, notifications) for free, but means hand-matching request ids to responses to record anything. Resources and prompts can be added to the SDK version later if a demo needs them.
+
+## The sample agent always launches its tools through the proxy
+
+**Decision:** `connectMcpTools()` always starts `mcp-proxy -- node mcp-server.js`. When `rewind run` isn't involved, `REWIND_RUN_ID` is unset and the proxy just passes calls through. The agent passes `REWIND_RUN_ID` and `REWIND_SERVER_URL` explicitly, because the SDK's stdio transport only hands a short list of "safe" variables to the process it launches.
+
+**Why:** One code path, so the setup that's tested is the same one that gets recorded. A passthrough hop costs little.
+
+**Rejected:** Adding the proxy only when `REWIND_RUN_ID` is set. That's two launch paths, and the recorded one would be the less tested.

@@ -39,9 +39,9 @@ test('a protocol error (server gone) becomes an { error } result, not a throw', 
   assert.match(error, /^Tool call failed: /);
 });
 
-// Launches the real server process. Only lists tools, so the real sandbox
+// Launches the real proxy and server processes. Only lists tools, so the real sandbox
 // is never touched.
-test('connectMcpTools launches the server over stdio', async () => {
+test('connectMcpTools launches the server behind the MCP proxy', async () => {
   const tools = await connectMcpTools();
   try {
     assert.equal(JSON.stringify(tools.definitions), JSON.stringify(toolDefinitions));
