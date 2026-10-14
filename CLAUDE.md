@@ -131,7 +131,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 - `POST /r/:runId/v1/chat/completions`: LLM proxy (Phase 2)
 - `POST /api/runs`: create a run (used by the CLI)
 - `PATCH /api/runs/:id`: update status when the agent exits (or when the CLI catches Ctrl+C: `failed`)
-- `POST /api/runs/:id/steps`: **start** a step. Body `{ type, request }`. Server assigns `idx`, saves the request, returns `{ idx, mode, response? }`
+- `POST /api/runs/:id/steps`: **start** a step. Body `{ type, request }`. Server assigns `idx`, saves the request, returns `{ idx, mode }`, plus the parent's `{ response, error }` for `replay`
 - `PATCH /api/runs/:id/steps/:idx`: **finish** a live step with `{ response, error, latency_ms, tokens_in, tokens_out }`
 
 ### Step recording (start + finish)

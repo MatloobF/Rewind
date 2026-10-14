@@ -1,34 +1,112 @@
 // Step recording in two calls: startStep before the live call, finishStep
-// after it. All replay decisions (Phase 5) will be made in startStep, so
-// the LLM proxy and the MCP proxy both just follow the mode it returns.
+// after it. All replay decisions are made in startStep, so the LLM proxy and
+// the MCP proxy both just follow the mode it returns.
 import { pool, withTransaction } from './db.js';
 import { hashRequest } from './hash.js';
 import { notFound, conflict } from './errors.js';
 
-// Starts a step: assigns the next idx and saves the request with response NULL.
-// Returns { idx, mode }. Until Phase 5 the mode is always 'live'.
+// Starts a step: assigns the next idx and saves the request. Returns
+// { idx, mode } and, for mode 'replay', the parent's { response, error }.
+//
+// For a fork run with fork_step = N (Rule 6):
+//   idx < N  -> 'replay': the parent's recorded result, no live call
+//   idx = N  -> 'live' for now (the override is applied in Phase 5 step 2)
+//   idx > N  -> 'live'
+// If the request at idx <= N doesn't match the parent's, the run diverged:
+// diverged_at_step is set and every step from then on is live.
 export async function startStep(runId, { type, request }) {
   return withTransaction(async (client) => {
     // Lock the run row. A second startStep for the same run (e.g. LLM proxy
     // and MCP proxy at once) waits here until this transaction commits, so
-    // both can't read the same MAX(idx).
+    // both can't read the same MAX(idx), and both see the same divergence.
     const { rows: runs } = await client.query(
-      'SELECT status FROM runs WHERE id = $1 FOR UPDATE',
+      `SELECT status, parent_run_id, fork_step, diverged_at_step
+       FROM runs WHERE id = $1 FOR UPDATE`,
       [runId],
     );
     if (runs.length === 0) throw notFound(`run ${runId} not found`);
-    if (runs[0].status !== 'running') {
-      throw conflict(`run ${runId} is ${runs[0].status}, not running`);
+    const run = runs[0];
+    if (run.status !== 'running') {
+      throw conflict(`run ${runId} is ${run.status}, not running`);
     }
 
-    const { rows } = await client.query(
-      `INSERT INTO steps (run_id, idx, type, request, request_hash)
-       SELECT $1, COALESCE(MAX(idx), -1) + 1, $2, $3, $4 FROM steps WHERE run_id = $1
-       RETURNING idx`,
-      [runId, type, JSON.stringify(request), hashRequest(request)],
+    const { rows: next } = await client.query(
+      'SELECT COALESCE(MAX(idx), -1) + 1 AS idx FROM steps WHERE run_id = $1',
+      [runId],
     );
-    return { idx: rows[0].idx, mode: 'live' };
+    const idx = next[0].idx;
+    const step = { runId, idx, type, request, hash: hashRequest(request) };
+
+    if (!followsParent(run, idx)) {
+      await insertStep(client, step);
+      return { idx, mode: 'live' };
+    }
+
+    const parentStep = await getStep(client, run.parent_run_id, idx);
+    if (!matchesParent(parentStep, step)) {
+      await client.query('UPDATE runs SET diverged_at_step = $2 WHERE id = $1', [runId, idx]);
+      await insertStep(client, step);
+      return { idx, mode: 'live' };
+    }
+
+    if (idx === run.fork_step) {
+      await insertStep(client, step);
+      return { idx, mode: 'live' };
+    }
+
+    await insertStep(client, step, parentStep);
+    return { idx, mode: 'replay', response: parentStep.response, error: parentStep.error };
   });
+}
+
+// True while a fork run is still on its parent's path: it has a parent,
+// hasn't diverged, and hasn't gone past the fork step.
+function followsParent(run, idx) {
+  return run.parent_run_id != null && run.diverged_at_step == null && idx <= run.fork_step;
+}
+
+// The parent step can stand in for this one only if it exists, was finished
+// (an unfinished step has nothing to replay), and asked the same thing.
+function matchesParent(parentStep, step) {
+  return (
+    parentStep != null &&
+    (parentStep.response != null || parentStep.error != null) &&
+    parentStep.type === step.type &&
+    parentStep.request_hash === step.hash
+  );
+}
+
+async function getStep(client, runId, idx) {
+  const { rows } = await client.query(
+    'SELECT * FROM steps WHERE run_id = $1 AND idx = $2',
+    [runId, idx],
+  );
+  return rows[0] ?? null;
+}
+
+// Inserts a step. Without `replayedFrom` it's a live step with response NULL.
+// With it, the row is complete: the parent's result, marked replayed.
+// latency_ms stays NULL for a replayed step because no call was made.
+async function insertStep(client, { runId, idx, type, request, hash }, replayedFrom = null) {
+  const from = replayedFrom ?? {};
+  await client.query(
+    `INSERT INTO steps
+       (run_id, idx, type, request, request_hash, response, error, tokens_in, tokens_out, replayed)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+    [
+      runId,
+      idx,
+      type,
+      JSON.stringify(request),
+      hash,
+      // pg already parsed the parent's JSONB; stringify it back. NULL stays NULL.
+      from.response == null ? null : JSON.stringify(from.response),
+      from.error ?? null,
+      from.tokens_in ?? null,
+      from.tokens_out ?? null,
+      replayedFrom != null,
+    ],
+  );
 }
 
 // Finishes a live step with the result of the real call. A step can be

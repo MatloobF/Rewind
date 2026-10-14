@@ -2,11 +2,28 @@ import { pool } from './db.js';
 import { notFound } from './errors.js';
 
 // Creates a run in 'running' status. command is an argv array.
-export async function createRun({ name = null, command, cwd }) {
+// A fork also passes parentRunId and forkStep (and, from Phase 5 step 2,
+// forkOverride); startStep then replays the parent up to forkStep.
+export async function createRun({
+  name = null,
+  command,
+  cwd,
+  parentRunId = null,
+  forkStep = null,
+  forkOverride = null,
+}) {
   const { rows } = await pool.query(
-    `INSERT INTO runs (name, command, cwd) VALUES ($1, $2, $3) RETURNING *`,
+    `INSERT INTO runs (name, command, cwd, parent_run_id, fork_step, fork_override)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
     // pg would turn a JS array into a Postgres array, not JSON, so stringify it.
-    [name, JSON.stringify(command), cwd],
+    [
+      name,
+      JSON.stringify(command),
+      cwd,
+      parentRunId,
+      forkStep,
+      forkOverride == null ? null : JSON.stringify(forkOverride),
+    ],
   );
   return rows[0];
 }
