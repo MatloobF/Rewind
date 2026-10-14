@@ -241,3 +241,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** A link can point at the exact step where an agent went wrong, and reloading keeps your place. It's one `useSearchParams` call.
 
 **Rejected:** Keeping the selection in React state only, which is lost on reload and can't be shared.
+
+## The file-tools MCP server uses the SDK's low-level `Server` and reports failures with `isError`
+
+**Decision:** `examples/agent/mcp-server.js` builds on the SDK's low-level `Server` with `setRequestHandler`. It serves the JSON Schemas already in `tools.js`, mapped to MCP's `{ name, description, inputSchema }`. A tool that fails returns a normal result with `isError: true` and the `{ error }` JSON as text. It doesn't throw a protocol error. The sandbox root can be passed only to `createServer()` for tests, and the stdio entry point always uses the real sandbox.
+
+**Why:** The tool definitions stay in one place, so the schemas the model sees can't drift from the ones in `tools.js`, and no `zod` dependency is needed. With `isError`, the agent still gets the error message and can fix its next call, which is how the tools behaved before MCP. It's also what Rule 5 records in the `error` column. Not having a flag or env var for the root means nothing outside the code can point the tools at another folder (Rule 9).
+
+**Rejected:** The high-level `McpServer.registerTool()`, which needs every schema rewritten in `zod`. Also rejected: throwing on tool failure, which turns a fixable mistake into a protocol error the model never sees.
