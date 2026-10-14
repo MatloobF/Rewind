@@ -297,3 +297,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Two kinds cover every edit the roadmap asks for (tool result, prompt, model) without a separate case for each. A tool result is just a response. The stored request is the one actually sent, so the timeline and later forks of this fork see the real call. `replayed = false` because the edited response came from the user, not from the parent run.
 
 **Rejected:** Separate kinds like `model` or `prompt`. They'd each need their own merge logic, and they're all just an edited request. Also rejected: storing the agent's original request at the fork step, which would leave a row whose request doesn't match the call that produced its response.
+
+## How the LLM proxy answers replayed and overridden steps
+
+**Decision:** For `replay`, the proxy sends the parent's stored `response` as JSON and makes no upstream call. A step that succeeded comes back as 200. An upstream error status comes back with the same status and body: the status isn't stored, so it is read from our own `upstream HTTP <status>: ...` error text. A failure with no stored body (upstream unreachable, or a body that wasn't JSON) comes back as `502 { error }` with the recorded message. A response override is sent as 200 JSON. A request override is sent upstream as `JSON.stringify(request)` in place of the agent's bytes, and is then finished like any live step.
+
+**Why:** The agent should get the same result it got the first time, and status codes matter because the OpenAI SDK throws on a 4xx/5xx. Reading the status from our own error text avoids a schema change for a rare case. The format is written in the same file (`describeError`), so the two can't drift apart unnoticed. Replayed bodies are equal JSON, not the same bytes: Postgres `jsonb` doesn't keep key order or whitespace. That's fine, because the SDK parses the body, and Rule 2 (byte-for-byte) applies to live record mode, not to answers Rewind serves itself.
+
+**Rejected:** Adding a `status` column now. It's cleaner, but it's a migration plus changes to both recorders, for failed steps that a fork usually goes past anyway. If replaying failures turns out to matter, it can be added later. Also rejected: replaying every failure as a 502, which would turn a 404 the agent handled into a different error.

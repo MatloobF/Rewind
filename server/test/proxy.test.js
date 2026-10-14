@@ -7,6 +7,8 @@ import { createApp } from '../src/app.js';
 import { migrate } from '../src/migrate.js';
 import { pool } from '../src/db.js';
 import { hashRequest } from '../src/hash.js';
+import { createRun, setRunStatus } from '../src/runs.js';
+import { startStep, finishStep } from '../src/steps.js';
 
 const TEST_NAME = 'proxy-test';
 
@@ -194,4 +196,109 @@ test('a finished run refuses more calls', async () => {
   });
   assert.equal((await chat(runId, '{"model":"m","messages":[]}')).status, 409);
   assert.equal(received, undefined);
+});
+
+// --- Fork runs: the proxy follows the mode startStep returns ---
+
+const askHi = { model: 'rewind-qwen', messages: [{ role: 'user', content: 'hi' }] };
+const askMore = { model: 'rewind-qwen', messages: [{ role: 'user', content: 'more' }] };
+
+// A finished parent run with the given llm steps, recorded through the store.
+async function recordParent(steps) {
+  const run = await createRun({ name: TEST_NAME, command: ['node', 'agent.js'], cwd: '.' });
+  for (const { request, result } of steps) {
+    const { idx } = await startStep(run.id, { type: 'llm', request });
+    await finishStep(run.id, idx, result);
+  }
+  await setRunStatus(run.id, 'success');
+  return run;
+}
+
+async function forkOf(parent, forkStep, forkOverride = null) {
+  const run = await createRun({
+    name: TEST_NAME, command: ['node', 'agent.js'], cwd: '.', parentRunId: parent.id, forkStep, forkOverride,
+  });
+  return run.id;
+}
+
+const parentAnswer = { ...completion, id: 'chatcmpl-parent' };
+
+test('a fork replays the parent answer without calling upstream, then goes live', async () => {
+  const parent = await recordParent([
+    { request: askHi, result: { response: parentAnswer, tokens_in: 1, tokens_out: 1 } },
+    { request: askMore, result: { response: parentAnswer } },
+  ]);
+  const runId = await forkOf(parent, 1);
+
+  const replayed = await chat(runId, JSON.stringify(askHi));
+  assert.equal(replayed.status, 200);
+  assert.match(replayed.headers.get('content-type'), /application\/json/);
+  assert.deepEqual(await replayed.json(), parentAnswer);
+  assert.equal(received, undefined);
+
+  // Step 1 is the fork step with no override: a normal live call.
+  const live = await chat(runId, JSON.stringify(askMore));
+  assert.deepEqual(await live.json(), completion);
+  assert.deepEqual(JSON.parse(received.body), askMore);
+
+  const steps = await stepsOf(runId);
+  assert.deepEqual(steps.map((s) => s.replayed), [true, false]);
+  assert.deepEqual(steps[1].response, completion);
+});
+
+test('a replayed upstream error keeps its status and body', async () => {
+  const errorBody = { error: { message: 'model "nope" not found' } };
+  const parent = await recordParent([
+    { request: askHi, result: { response: errorBody, error: 'upstream HTTP 404: model "nope" not found' } },
+    { request: askMore, result: { response: parentAnswer } },
+  ]);
+  const runId = await forkOf(parent, 1);
+
+  const res = await chat(runId, JSON.stringify(askHi));
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), errorBody);
+  assert.equal(received, undefined);
+});
+
+test('a replayed failure with no body comes back as 502 with the recorded error', async () => {
+  const parent = await recordParent([
+    { request: askHi, result: { error: 'upstream request failed: ECONNREFUSED' } },
+    { request: askMore, result: { response: parentAnswer } },
+  ]);
+  const runId = await forkOf(parent, 1);
+
+  const res = await chat(runId, JSON.stringify(askHi));
+  assert.equal(res.status, 502);
+  assert.deepEqual(await res.json(), { error: 'upstream request failed: ECONNREFUSED' });
+  assert.equal(received, undefined);
+});
+
+test('a response override is sent back without calling upstream', async () => {
+  const parent = await recordParent([{ request: askHi, result: { response: parentAnswer } }]);
+  const edited = { ...completion, id: 'chatcmpl-edited' };
+  const runId = await forkOf(parent, 0, { kind: 'response', response: edited });
+
+  const res = await chat(runId, JSON.stringify(askHi));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), edited);
+  assert.equal(received, undefined);
+  const [step] = await stepsOf(runId);
+  assert.deepEqual(step.response, edited);
+});
+
+test('a request override sends the edited request upstream and records the reply', async () => {
+  const parent = await recordParent([{ request: askHi, result: { response: parentAnswer } }]);
+  const edited = { ...askHi, model: 'other-model' };
+  const runId = await forkOf(parent, 0, { kind: 'request', request: edited });
+
+  const res = await chat(runId, JSON.stringify(askHi));
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), completion);
+  assert.deepEqual(JSON.parse(received.body), edited);
+
+  const [step] = await stepsOf(runId);
+  assert.deepEqual(step.request, edited);
+  assert.deepEqual(step.response, completion);
+  assert.equal(step.tokens_in, 42);
+  assert.equal(step.replayed, false);
 });
