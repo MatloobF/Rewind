@@ -249,3 +249,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** The tool definitions stay in one place, so the schemas the model sees can't drift from the ones in `tools.js`, and no `zod` dependency is needed. With `isError`, the agent still gets the error message and can fix its next call, which is how the tools behaved before MCP. It's also what Rule 5 records in the `error` column. Not having a flag or env var for the root means nothing outside the code can point the tools at another folder (Rule 9).
 
 **Rejected:** The high-level `McpServer.registerTool()`, which needs every schema rewritten in `zod`. Also rejected: throwing on tool failure, which turns a fixable mistake into a protocol error the model never sees.
+
+## The agent calls its tools through a small `{ definitions, call }` interface
+
+**Decision:** `runAgent` takes a required `tools` option shaped `{ definitions, call(name, args) → text, close() }`. `toolClient.js` has two versions. `connectMcpTools()` launches `mcp-server.js` over stdio, and `index.js` uses it. `localTools(root)` runs `tools.js` in-process, and the tests use it. MCP's tool list is mapped back to the exact OpenAI schemas, and the tool result text is passed through unchanged.
+
+**Why:** A test checks that moving to MCP didn't change a single byte of the LLM requests. That matters because replay matches requests by hash. The agent loop doesn't need to know about MCP, and its tests stay fast with no subprocesses. `tools` is required rather than defaulting to in-process tools, so the real agent can't quietly skip MCP (and later the recording proxy).
+
+**Rejected:** Having the agent call the MCP `Client` directly inside the loop, which would force every agent test to start a server. Also rejected: a default of in-process tools, which would be a hidden second path around the proxy.

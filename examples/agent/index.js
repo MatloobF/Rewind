@@ -1,4 +1,5 @@
 import { runAgent } from './agent.js';
+import { connectMcpTools } from './toolClient.js';
 
 // Usage: node examples/agent/index.js "sort the files"
 // The final answer goes to stdout; progress logs go to stderr, so the answer
@@ -12,11 +13,17 @@ if (!task) {
   process.exit(1);
 }
 
+// The tools run in a separate MCP server process; close it when done so
+// the agent can exit.
+let tools;
 try {
-  const { ok, answer } = await runAgent(task);
+  tools = await connectMcpTools();
+  const { ok, answer } = await runAgent(task, { tools });
   if (answer) console.log(answer);
   process.exitCode = ok ? 0 : 1;
 } catch (err) {
   console.error(`Agent failed: ${err.message}`);
   process.exitCode = 1;
+} finally {
+  await tools?.close();
 }

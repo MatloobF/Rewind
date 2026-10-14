@@ -1,6 +1,4 @@
 import OpenAI from 'openai';
-import { toolDefinitions, runTool } from './tools.js';
-import { SANDBOX_DIR } from './safePath.js';
 
 // qwen2.5:7b with a 16k context, built from ./Modelfile.
 export const MODEL = 'rewind-qwen';
@@ -32,14 +30,17 @@ export function createClient() {
 
 // Runs the agent loop: call the LLM, run any tools it asks for, send the
 // results back, repeat until it answers without tool calls or hits the cap.
-// Returns { ok, answer, steps }. Throws only if the LLM call itself fails.
+// `tools` is { definitions, call } from toolClient.js (MCP, or in-process
+// in tests). Returns { ok, answer, steps }. Throws only if the LLM call
+// itself fails.
 export async function runAgent(task, {
+  tools,
   client = createClient(),
   model = MODEL,
   maxSteps = MAX_STEPS,
-  root = SANDBOX_DIR,
   log = (msg) => console.error(msg),
 } = {}) {
+  if (!tools) throw new Error('runAgent needs a tools option');
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: task },
@@ -49,7 +50,7 @@ export async function runAgent(task, {
     const response = await client.chat.completions.create({
       model,
       messages,
-      tools: toolDefinitions,
+      tools: tools.definitions,
       temperature: 0,
     });
     const message = response.choices[0].message;
@@ -64,13 +65,9 @@ export async function runAgent(task, {
     // Run tool calls one at a time, in order. Rewind assumes a sequential
     // agent (one call at a time), so no Promise.all here.
     for (const call of toolCalls) {
-      const result = await runToolCall(call, root);
-      log(`[step ${step}] ${call.function.name} ${call.function.arguments} -> ${JSON.stringify(result)}`);
-      messages.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: JSON.stringify(result),
-      });
+      const content = await runToolCall(call, tools);
+      log(`[step ${step}] ${call.function.name} ${call.function.arguments} -> ${content}`);
+      messages.push({ role: 'tool', tool_call_id: call.id, content });
     }
   }
 
@@ -79,13 +76,14 @@ export async function runAgent(task, {
 }
 
 // The model sends tool arguments as a JSON string, which small models
-// sometimes get wrong. Bad JSON becomes an { error } the model can fix.
-async function runToolCall(call, root) {
+// sometimes get wrong. Bad JSON becomes an { error } the model can fix,
+// without calling the tool. Returns the tool message text.
+async function runToolCall(call, tools) {
   let args;
   try {
     args = JSON.parse(call.function.arguments || '{}');
   } catch {
-    return { error: `Arguments are not valid JSON: ${call.function.arguments}` };
+    return JSON.stringify({ error: `Arguments are not valid JSON: ${call.function.arguments}` });
   }
-  return runTool(call.function.name, args, root);
+  return tools.call(call.function.name, args);
 }
