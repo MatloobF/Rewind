@@ -81,7 +81,7 @@ node examples/agent/index.js "sort the files"         # run the sample agent dir
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)
 node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
 cd server && npm link                                 # once: installs the `rewind` command globally
-rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run (server must be running)
+rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run, LLM + tool steps (server must be running)
 ```
 
 Update this section when scripts are added or renamed.
@@ -170,7 +170,7 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 1:** Sample file-organizer agent (agent loop, 4 tools, sandbox)
 - [x] **Phase 2:** LLM recording proxy, schema, `rewind run` CLI (non-streaming first)
 - [x] **Phase 3:** REST API (`/api/runs`, `/api/runs/:id`, `/api/runs/:id/tree` via recursive CTE) + React run list and timeline
-- [ ] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
+- [x] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
 - [ ] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
 - [ ] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
 - [ ] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
