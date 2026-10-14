@@ -71,6 +71,7 @@ cd server && npm test                                 # server tests (hashReques
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000
+cd web && npm test                                    # web logic tests (run diff alignment; no browser, no server)
 cd intel && uvicorn main:app --reload --port 8000     # Python service
 cd examples/agent && npm install                      # sample agent deps (openai SDK, MCP SDK)
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
@@ -142,7 +143,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
    - `override` (Phase 5): apply `fork_override` as Rule 6 says. `{ kind: "response", response }` returns `{ response }` (row already finished, no call, no PATCH); `{ kind: "request", request }` returns `{ request }` to send live, then PATCH.
 2. All replay decisions are made in the server, in one place. The MCP proxy uses these two HTTP routes. The LLM proxy lives in the server, so it calls the same functions directly.
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
-- `POST /api/runs/:id/fork`: fork a finished run. Body `{ fork_step, fork_override?, name?, setup? }`; `setup` is an optional argv run (no shell, in the run's `cwd`) before the agent, e.g. `["node", "examples/agent/seed.js"]`. Returns 201 with the new run at once; the server launches the agent in the background and sets the status when it exits (Phase 5)
+- `POST /api/runs/:id/fork`: fork a finished run. Body `{ fork_step, fork_override?, name?, setup? }`; `setup` is an optional argv run (no shell, in the run's `cwd`) before the agent, e.g. `["node", "examples/agent/seed.js"]`. Returns 201 with the new run at once; the server launches the agent in the background and sets the status when it exits (Phase 5). Replayed tool steps don't run, so `setup` resets the world to the run's start, not to its state at the fork step; a fork after a file-changing tool call starts from the wrong state.
 
 ## Key design rules (do not break these)
 
@@ -171,7 +172,7 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 2:** LLM recording proxy, schema, `rewind run` CLI (non-streaming first)
 - [x] **Phase 3:** REST API (`/api/runs`, `/api/runs/:id`, `/api/runs/:id/tree` via recursive CTE) + React run list and timeline
 - [x] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
-- [ ] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
+- [x] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
 - [ ] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
 - [ ] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
 - [ ] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
