@@ -9,6 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { parseProxyArgs, createProxy } from './src/proxy.js';
+import { createRecorder } from './src/recorder.js';
 
 const log = (message) => console.error(`[rewind-mcp-proxy] ${message}`);
 
@@ -44,7 +45,19 @@ upstream.onclose = () => {
   process.exit(1);
 };
 
-await createProxy(upstream).connect(new StdioServerTransport());
+// `rewind run` sets REWIND_RUN_ID (passed down by the agent). Without it
+// there is no run to record into, and the proxy is a plain passthrough.
+const runId = process.env.REWIND_RUN_ID;
+let recorder = null;
+if (runId) {
+  const serverUrl = (process.env.REWIND_SERVER_URL || 'http://localhost:4000').replace(/\/+$/, '');
+  recorder = createRecorder({ runId, serverUrl, log });
+  log(`recording tool calls into run ${runId}`);
+} else {
+  log('REWIND_RUN_ID is not set: passing tool calls through without recording');
+}
+
+await createProxy(upstream, { recorder }).connect(new StdioServerTransport());
 
 // The agent closing our stdin means it is done. Shut the real server down
 // the same way (close its stdin, kill it only if it doesn't exit) and exit.

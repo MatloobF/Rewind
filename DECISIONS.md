@@ -273,3 +273,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** One code path, so the setup that's tested is the same one that gets recorded. A passthrough hop costs little.
 
 **Rejected:** Adding the proxy only when `REWIND_RUN_ID` is set. That's two launch paths, and the recorded one would be the less tested.
+
+## The MCP proxy records tool calls through the API and fails open
+
+**Decision:** When `REWIND_RUN_ID` is set, each `tools/call` becomes a tool step. The proxy sends `POST /api/runs/:id/steps` with `{ type: 'tool', request: { name, arguments } }`, makes the real call, then `PATCH`es `{ response, error, latency_ms }`. A missing `arguments` is stored as `{}`. An `isError` result keeps the whole result as `response`, and its text goes in `error` (Rule 5). A protocol error has no `response`, and `error` is `MCP error <code>: <message>`. `tools/list` isn't recorded. If the API is down, slow (5-second timeout), or refuses the step (for example, 409 because the run has finished), the proxy logs to stderr and makes the real call anyway. If saving the result fails, it still returns the result.
+
+**Why:** Recording must never change what the agent sees (Rule 2). Losing a recorded step is better than breaking a tool call in someone's agent. The proxy goes through the same start/finish routes as the LLM proxy, so Phase 5 can make replay decisions for both in `startStep`. The tests use a fake API on `node:http`, so they need no Postgres. The routes themselves are tested in `server/`.
+
+**Rejected:** Failing closed, which returns an error to the agent when recording fails. The LLM proxy does effectively fail closed when the run isn't running, but that's because its run id is in the URL, so there's no unrecorded path to fall back to. **Revisit in Phase 5:** for a fork run, silently going live when the API is unreachable would give wrong replay results. A fork should probably fail closed.

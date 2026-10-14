@@ -13,7 +13,7 @@ export const TOOLS = [
   { name: 'echo', description: 'Returns its arguments as JSON text.', inputSchema: { type: 'object', properties: { b: { type: 'number' }, a: { type: 'string' } } } },
   { name: 'fail', description: 'Always fails with isError.', inputSchema: { type: 'object' } },
   { name: 'picture', description: 'Returns text and an image.', inputSchema: { type: 'object' } },
-  { name: 'env', description: 'Returns REWIND_RUN_ID from its environment.', inputSchema: { type: 'object' } },
+  { name: 'env', description: 'Returns ENV_CHECK from its environment.', inputSchema: { type: 'object' } },
 ];
 
 export function createUpstream() {
@@ -28,7 +28,7 @@ export function createUpstream() {
       case 'picture':
         return { content: [{ type: 'text', text: 'a dot' }, { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }] };
       case 'env':
-        return { content: [{ type: 'text', text: process.env.REWIND_RUN_ID ?? '(unset)' }] };
+        return { content: [{ type: 'text', text: process.env.ENV_CHECK ?? '(unset)' }] };
       default:
         throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${params.name}`);
     }

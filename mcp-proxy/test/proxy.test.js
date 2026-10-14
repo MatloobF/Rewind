@@ -98,7 +98,7 @@ test('over stdio: forwards calls, passes env through, and shuts the server down'
   await client.connect(new StdioClientTransport({
     command: process.execPath,
     args: [PROXY_PATH, '--', process.execPath, UPSTREAM_PATH],
-    env: { REWIND_RUN_ID: 'run-123', PID_FILE: pidFile },
+    env: { ENV_CHECK: 'passed-through', PID_FILE: pidFile },
   }));
 
   assert.deepEqual((await client.listTools()).tools, TOOLS);
@@ -106,7 +106,7 @@ test('over stdio: forwards calls, passes env through, and shuts the server down'
   assert.deepEqual(echoed.content, [{ type: 'text', text: '{"a":"hi"}' }]);
   // The proxy hands its whole environment to the real server.
   const env = await client.callTool({ name: 'env', arguments: {} });
-  assert.equal(env.content[0].text, 'run-123');
+  assert.equal(env.content[0].text, 'passed-through');
 
   const upstreamPid = Number(await fs.readFile(pidFile, 'utf8'));
   assert.ok(isAlive(upstreamPid));

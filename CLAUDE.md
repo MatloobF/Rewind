@@ -74,12 +74,12 @@ cd web && npm run dev                                 # frontend on :5173, proxi
 cd intel && uvicorn main:app --reload --port 8000     # Python service
 cd examples/agent && npm install                      # sample agent deps (openai SDK, MCP SDK)
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
-cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, error forwarding, stdio shutdown)
+cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open; no Postgres)
 cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files
 cd examples/agent && npm test                         # sample agent tests (safePath, tools, seed, loop, MCP server + client)
 node examples/agent/index.js "sort the files"         # run the sample agent directly (~3 min on CPU)
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)
-node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server (passthrough for now)
+node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
 cd server && npm link                                 # once: installs the `rewind` command globally
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run (server must be running)
 ```
