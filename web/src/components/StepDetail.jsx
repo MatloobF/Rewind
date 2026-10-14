@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import ForkEditor from './ForkEditor.jsx';
 import JsonView from './JsonView.jsx';
 import Message from './Message.jsx';
 import { formatMs, formatNumber } from '../format.js';
@@ -13,8 +14,11 @@ function Section({ title, children }) {
   );
 }
 
-export default function StepDetail({ step, steps, runStatus }) {
+export default function StepDetail({ step, steps, run }) {
   const reply = replyMessage(step);
+  const [forking, setForking] = useState(false);
+  // The server only forks finished runs: a running run's steps aren't final.
+  const canFork = run.status !== 'running';
 
   return (
     <div>
@@ -26,10 +30,23 @@ export default function StepDetail({ step, steps, runStatus }) {
           {formatMs(step.latency_ms)} · {formatNumber(step.tokens_in)} in / {formatNumber(step.tokens_out)} out
         </span>
         {step.replayed && <span className="text-sm text-violet-300">replayed from parent run</span>}
+        {!forking && (
+          <button
+            type="button"
+            onClick={() => setForking(true)}
+            disabled={!canFork}
+            title={canFork ? 'Replay up to here, change this step, and run the rest live' : 'Wait until the run has finished'}
+            className="ml-auto rounded border border-violet-500/50 px-3 py-1 text-sm text-violet-200 hover:bg-violet-500/10 disabled:opacity-40"
+          >
+            Fork from here
+          </button>
+        )}
       </div>
       <div className="mt-1 font-mono text-xs text-zinc-600" title="request_hash">
         {step.request_hash}
       </div>
+
+      {forking && <ForkEditor run={run} step={step} onCancel={() => setForking(false)} />}
 
       {step.error && (
         <div className="mt-4 rounded border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">
@@ -38,7 +55,7 @@ export default function StepDetail({ step, steps, runStatus }) {
       )}
       {stepState(step) === 'pending' && (
         <div className="mt-4 rounded border border-zinc-700 p-3 text-sm text-zinc-400">
-          {runStatus === 'running'
+          {run.status === 'running'
             ? 'Call in progress...'
             : 'No response was recorded: the agent stopped during this call.'}
         </div>

@@ -12,3 +12,17 @@ async function getJson(path) {
 export const fetchRuns = () => getJson('/api/runs');
 export const fetchRun = (id) => getJson(`/api/runs/${id}`);
 export const fetchRunTree = (id) => getJson(`/api/runs/${id}/tree`);
+
+async function postJson(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+  return data;
+}
+
+// Body: { fork_step, fork_override?, name?, setup? } -> the new fork run.
+export const forkRun = (id, body) => postJson(`/api/runs/${id}/fork`, body);

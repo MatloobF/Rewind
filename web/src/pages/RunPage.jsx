@@ -68,8 +68,8 @@ export default function RunPage() {
             />
           </aside>
           <div className="min-w-0">
-            {/* key resets the "show all messages" toggle when the step changes */}
-            <StepDetail key={selected.idx} step={selected} steps={steps} runStatus={run.status} />
+            {/* key resets the "show all messages" toggle and the fork editor when the step changes */}
+            <StepDetail key={selected.idx} step={selected} steps={steps} run={run} />
           </div>
         </div>
       )}
