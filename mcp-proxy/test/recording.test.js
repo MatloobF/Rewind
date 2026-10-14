@@ -22,7 +22,7 @@ async function fakeApi(respond = defaultRespond) {
   const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
-    calls.push({ method: req.method, path: req.url, body: JSON.parse(raw) });
+    calls.push({ method: req.method, path: req.url, body: raw ? JSON.parse(raw) : undefined });
     const reply = respond(req.method, req.url, () => nextIdx++);
     if (!reply) return; // never answer (to test the timeout)
     res.writeHead(reply.status, { 'content-type': 'application/json' });
@@ -56,12 +56,22 @@ async function clientFor(server) {
 }
 
 // agent client -> recording proxy -> fake upstream, in-process.
-async function recordingProxy(serverUrl, options = {}) {
+// `upstreamCalls` lists the tool calls that really reached the upstream.
+// With `lookUp`, the recorder first asks the API whether the run is a fork,
+// as index.js does.
+async function recordingProxy(serverUrl, { lookUp = false, ...options } = {}) {
   const logs = [];
   const recorder = createRecorder({ runId: RUN_ID, serverUrl, log: (m) => logs.push(m), ...options });
+  if (lookUp) await recorder.lookUpRun();
   const upstream = await clientFor(createUpstream());
+  const upstreamCalls = [];
+  const callTool = upstream.callTool.bind(upstream);
+  upstream.callTool = (params, ...rest) => {
+    upstreamCalls.push(params);
+    return callTool(params, ...rest);
+  };
   const client = await clientFor(createProxy(upstream, { recorder }));
-  return { client, logs };
+  return { client, logs, upstreamCalls };
 }
 
 const stepsPath = `/api/runs/${RUN_ID}/steps`;
@@ -179,17 +189,6 @@ test('a hung Rewind API times out instead of stalling the agent', async () => {
   assert.match(logs.join('\n'), /could not record tool call "echo"/);
 });
 
-test('a mode other than live is logged and the tool is called live', async () => {
-  const api = await fakeApi((method, path, nextIdx) => method === 'POST'
-    ? { status: 201, body: { idx: nextIdx(), mode: 'replay' } }
-    : { status: 200, body: {} });
-  const { client, logs } = await recordingProxy(api.url);
-  const result = await client.callTool({ name: 'echo', arguments: {} });
-  assert.deepEqual(result.content, [{ type: 'text', text: '{}' }]);
-  assert.match(logs.join('\n'), /mode "replay" is not supported yet/);
-  assert.equal(api.calls[1].method, 'PATCH');
-});
-
 // --- the real entry point: env vars turn recording on ---
 
 test('over stdio: REWIND_RUN_ID and REWIND_SERVER_URL turn recording on', async () => {
@@ -206,7 +205,9 @@ test('over stdio: REWIND_RUN_ID and REWIND_SERVER_URL turn recording on', async 
   } finally {
     await client.close();
   }
-  assert.deepEqual(api.calls.map((c) => `${c.method} ${c.path}`), [`POST ${stepsPath}`, `PATCH ${stepsPath}/0`]);
+  assert.deepEqual(api.calls.map((c) => `${c.method} ${c.path}`), [
+    `GET /api/runs/${RUN_ID}`, `POST ${stepsPath}`, `PATCH ${stepsPath}/0`,
+  ]);
 });
 
 test('over stdio: without REWIND_RUN_ID nothing is recorded', async () => {
@@ -224,4 +225,104 @@ test('over stdio: without REWIND_RUN_ID nothing is recorded', async () => {
     await client.close();
   }
   assert.equal(api.calls.length, 0);
+});
+
+// --- fork runs: the proxy follows the mode the server returns ---
+
+// A fake API for a fork run: GET says the run has a parent, and every
+// started step gets `startReply(idx)` as its answer.
+function forkApi(startReply) {
+  return fakeApi((method, path, nextIdx) => {
+    if (method === 'GET') return { status: 200, body: { id: RUN_ID, parent_run_id: 'parent-id' } };
+    if (method === 'POST') return startReply(nextIdx());
+    return { status: 200, body: {} };
+  });
+}
+
+const recordedResult = { content: [{ type: 'text', text: 'from the parent run' }] };
+
+test('replay: the parent result is returned, with no tool call and no finish', async () => {
+  const api = await forkApi((idx) => ({ status: 201, body: { idx, mode: 'replay', response: recordedResult, error: null } }));
+  const { client, upstreamCalls } = await recordingProxy(api.url, { lookUp: true });
+  const result = await client.callTool({ name: 'echo', arguments: { a: 'x' } });
+  assert.deepEqual(result, recordedResult);
+  assert.equal(upstreamCalls.length, 0);
+  assert.deepEqual(api.calls.map((c) => c.method), ['GET', 'POST']);
+});
+
+test('replay: an isError result is returned as it was recorded', async () => {
+  const failed = { content: [{ type: 'text', text: 'disk on fire' }], isError: true };
+  const api = await forkApi((idx) => ({ status: 201, body: { idx, mode: 'replay', response: failed, error: 'disk on fire' } }));
+  const { client, upstreamCalls } = await recordingProxy(api.url);
+  assert.deepEqual(await client.callTool({ name: 'fail', arguments: {} }), failed);
+  assert.equal(upstreamCalls.length, 0);
+});
+
+test('replay: a recorded protocol error reaches the agent as it did the first time', async () => {
+  // Record the error through a live proxy, then replay what was recorded.
+  const liveApi = await fakeApi();
+  const live = await recordingProxy(liveApi.url);
+  const errorOf = (c) => c.callTool({ name: 'nope', arguments: {} }).then(
+    () => assert.fail('expected an error'),
+    (err) => ({ code: err.code, message: err.message }),
+  );
+  const original = await errorOf(live.client);
+  const recordedError = liveApi.calls[1].body.error;
+
+  const api = await forkApi((idx) => ({ status: 201, body: { idx, mode: 'replay', response: null, error: recordedError } }));
+  const { client, upstreamCalls } = await recordingProxy(api.url);
+  assert.deepEqual(await errorOf(client), original);
+  assert.equal(upstreamCalls.length, 0);
+});
+
+test('override with a response: the edited result is returned, with no tool call and no finish', async () => {
+  const edited = { content: [{ type: 'text', text: 'edited by the user' }] };
+  const api = await forkApi((idx) => ({ status: 201, body: { idx, mode: 'override', response: edited } }));
+  const { client, upstreamCalls } = await recordingProxy(api.url, { lookUp: true });
+  assert.deepEqual(await client.callTool({ name: 'echo', arguments: { a: 'x' } }), edited);
+  assert.equal(upstreamCalls.length, 0);
+  assert.deepEqual(api.calls.map((c) => c.method), ['GET', 'POST']);
+});
+
+test('override with a request: the tool is called with the edited request, then finished', async () => {
+  const edited = { name: 'echo', arguments: { a: 'edited' } };
+  const api = await forkApi((idx) => ({ status: 201, body: { idx, mode: 'override', request: edited } }));
+  const { client, upstreamCalls } = await recordingProxy(api.url, { lookUp: true });
+
+  const result = await client.callTool({ name: 'echo', arguments: { a: 'x' } });
+  assert.deepEqual(result.content, [{ type: 'text', text: '{"a":"edited"}' }]);
+  assert.deepEqual(upstreamCalls.map((p) => ({ name: p.name, arguments: p.arguments })), [edited]);
+  const finish = api.calls[2];
+  assert.equal(finish.method, 'PATCH');
+  assert.deepEqual(finish.body.response, result);
+});
+
+test('a fork fails closed: if the step cannot be started, the tool is not called', async () => {
+  const api = await forkApi(() => ({ status: 500, body: { error: 'database exploded' } }));
+  const { client, upstreamCalls } = await recordingProxy(api.url, { lookUp: true });
+  await assert.rejects(
+    client.callTool({ name: 'echo', arguments: {} }),
+    /Rewind could not start tool call "echo" in fork run .*: 500 database exploded/,
+  );
+  assert.equal(upstreamCalls.length, 0);
+});
+
+test('a run that is not a fork still fails open after the lookup', async () => {
+  const api = await fakeApi((method) => method === 'GET'
+    ? { status: 200, body: { id: RUN_ID, parent_run_id: null } }
+    : { status: 500, body: { error: 'database exploded' } });
+  const { client, upstreamCalls } = await recordingProxy(api.url, { lookUp: true });
+  const result = await client.callTool({ name: 'echo', arguments: {} });
+  assert.deepEqual(result.content, [{ type: 'text', text: '{}' }]);
+  assert.equal(upstreamCalls.length, 1);
+});
+
+test('if the run lookup fails, recording fails open', async () => {
+  const api = await fakeApi((method) => method === 'GET'
+    ? { status: 500, body: { error: 'database exploded' } }
+    : { status: 500, body: { error: 'still exploded' } });
+  const { client, logs, upstreamCalls } = await recordingProxy(api.url, { lookUp: true });
+  await client.callTool({ name: 'echo', arguments: {} });
+  assert.equal(upstreamCalls.length, 1);
+  assert.match(logs.join('\n'), /could not look up run .*: 500 database exploded; recording will fail open/);
 });

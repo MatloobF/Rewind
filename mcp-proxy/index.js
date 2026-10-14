@@ -52,7 +52,8 @@ let recorder = null;
 if (runId) {
   const serverUrl = (process.env.REWIND_SERVER_URL || 'http://localhost:4000').replace(/\/+$/, '');
   recorder = createRecorder({ runId, serverUrl, log });
-  log(`recording tool calls into run ${runId}`);
+  const { isFork } = await recorder.lookUpRun();
+  log(`recording tool calls into ${isFork ? 'fork ' : ''}run ${runId}`);
 } else {
   log('REWIND_RUN_ID is not set: passing tool calls through without recording');
 }

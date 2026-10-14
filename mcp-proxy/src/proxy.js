@@ -41,16 +41,25 @@ export function createProxy(upstream, { recorder = null } = {}) {
   return server;
 }
 
-// Makes the real call between starting and finishing a tool step. Returns
-// the result (or throws the error) exactly as the real server gave it.
+// Starts a tool step and does what the server's mode says:
+//   live      make the real call, then finish the step with its result
+//   replay    return the parent run's result (or error) with no call
+//   override  return the edited result with no call, or call the tool with
+//             the edited request and finish the step as usual
+// Live results (and errors) are returned exactly as the real server gave them.
 async function recordedCall(upstream, params, recorder) {
   // A missing `arguments` means the same as {} in MCP, so both are stored
   // (and hashed) as {}.
-  const idx = await recorder.start({ name: params.name, arguments: params.arguments ?? {} });
+  const step = await recorder.start({ name: params.name, arguments: params.arguments ?? {} });
+  if (step?.mode === 'replay') return replayed(step);
+  if (step?.mode === 'override' && step.response) return step.response;
+
+  const idx = step?.idx ?? null;
+  const sent = step?.mode === 'override' ? { ...params, ...step.request } : params;
   const started = Date.now();
   let result;
   try {
-    result = await upstream.callTool(params);
+    result = await upstream.callTool(sent);
   } catch (err) {
     // A protocol error: there is no result, only the error (Rule 5).
     if (idx !== null) await recorder.finish(idx, { error: err.message, latency_ms: Date.now() - started });
@@ -64,6 +73,18 @@ async function recordedCall(upstream, params, recorder) {
     });
   }
   return result;
+}
+
+// A replayed step: the parent's result, isError results included. A step
+// that was a protocol error has only its error text, "MCP error <code>: ...";
+// throw it again with that code, so forwardErrors hands the agent the same
+// code and message it got the first time.
+function replayed({ response, error }) {
+  if (response != null) return response;
+  const err = new Error(error);
+  const code = Number(error.match(/^MCP error (-?\d+): /)?.[1]);
+  if (Number.isSafeInteger(code)) err.code = code;
+  throw err;
 }
 
 // MCP tools usually report failure as a result with isError: true instead of
