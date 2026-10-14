@@ -2,7 +2,7 @@
 // store functions in runs.js / steps.js.
 import { Router } from 'express';
 import { badRequest } from './errors.js';
-import { createRun, setRunStatus } from './runs.js';
+import { createRun, setRunStatus, listRuns, getRun, getRunTree } from './runs.js';
 import { startStep, finishStep } from './steps.js';
 import { isUuid, isPlainObject } from './validate.js';
 
@@ -17,6 +17,21 @@ function runIdParam(req) {
 }
 
 export const api = Router();
+
+// Run list, newest first, with step and token totals.
+api.get('/runs', async (req, res) => {
+  res.json(await listRuns());
+});
+
+// One run with all its steps (full request and response JSON).
+api.get('/runs/:id', async (req, res) => {
+  res.json(await getRun(runIdParam(req)));
+});
+
+// The fork tree containing this run: { root_id, runs: [...] }.
+api.get('/runs/:id/tree', async (req, res) => {
+  res.json(await getRunTree(runIdParam(req)));
+});
 
 // Create a run (used by the CLI). Body: { name?, command: string[], cwd }
 api.post('/runs', async (req, res) => {

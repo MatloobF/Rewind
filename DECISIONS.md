@@ -185,3 +185,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** It's the same rule as storing argv instead of a command string: no shell means no quoting problems and no injection. A test passes `say "hi" & echo pwned` as an argument and checks it arrives unchanged.
 
 **Rejected:** `shell: true` on Windows to allow `.cmd` files. It brings back the quoting and injection problems that argv storage was chosen to avoid.
+
+## The tree endpoint walks up to the root, then down, and returns a flat list
+
+**Decision:** `GET /api/runs/:id/tree` uses one recursive CTE in two parts. `ancestors` follows `parent_run_id` up from the given run to the root. `tree` then follows children down from that root. The result is `{ root_id, runs: [...] }`, a flat list where each run carries its `parent_run_id` and `fork_step`.
+
+**Why:** Asking from any run (root, fork or fork of a fork) gives the same whole tree, so the UI can show the branch graph from any run page. A flat list maps straight to the nodes and edges the graph library wants, and Postgres doesn't build nested JSON easily.
+
+**Rejected:** Only walking down from the given run (a fork's page would miss its parent and siblings), and returning nested `children` arrays (the UI would have to flatten them again for the graph).

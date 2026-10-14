@@ -167,3 +167,78 @@ test('bad JSON gives 400 and unknown routes give 404', async () => {
   assert.equal(res.status, 400);
   assert.equal((await call('GET', '/nope')).status, 404);
 });
+
+// No fork API until Phase 5, so tests insert fork rows directly.
+async function insertFork(parentId, forkStep) {
+  const { rows } = await pool.query(
+    `INSERT INTO runs (name, command, cwd, parent_run_id, fork_step, fork_override)
+     VALUES ($1, '["node"]', '.', $2, $3, '{}') RETURNING *`,
+    [TEST_NAME, parentId, forkStep],
+  );
+  return rows[0];
+}
+
+test('GET /api/runs lists newest first with step totals', async () => {
+  const older = await newRun();
+  const newer = await newRun();
+  await call('POST', `/api/runs/${newer.id}/steps`, { type: 'llm', request: llmRequest });
+  await call('PATCH', `/api/runs/${newer.id}/steps/0`, { response: {}, latency_ms: 50, tokens_in: 7, tokens_out: 3 });
+  await call('POST', `/api/runs/${newer.id}/steps`, { type: 'tool', request: { name: 'list_files' } });
+
+  const res = await call('GET', '/api/runs');
+  assert.equal(res.status, 200);
+  const ids = res.body.map((r) => r.id);
+  assert.ok(ids.indexOf(newer.id) < ids.indexOf(older.id));
+
+  const row = res.body.find((r) => r.id === newer.id);
+  // The unfinished tool step counts as a step but adds no tokens or latency.
+  assert.equal(row.step_count, 2);
+  assert.equal(row.tokens_in, 7);
+  assert.equal(row.tokens_out, 3);
+  assert.equal(row.latency_ms, 50);
+  assert.equal(res.body.find((r) => r.id === older.id).step_count, 0);
+});
+
+test('GET /api/runs/:id returns the run with steps in idx order', async () => {
+  const run = await newRun();
+  for (const type of ['llm', 'tool', 'llm']) {
+    await call('POST', `/api/runs/${run.id}/steps`, { type, request: llmRequest });
+  }
+  const res = await call('GET', `/api/runs/${run.id}`);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.id, run.id);
+  assert.deepEqual(res.body.steps.map((s) => [s.idx, s.type]), [[0, 'llm'], [1, 'tool'], [2, 'llm']]);
+  assert.deepEqual(res.body.steps[0].request, llmRequest);
+
+  assert.equal((await call('GET', '/api/runs/not-a-uuid')).status, 400);
+  assert.equal((await call('GET', '/api/runs/00000000-0000-0000-0000-000000000000')).status, 404);
+});
+
+test('GET /api/runs/:id/tree returns the same whole tree from any run in it', async () => {
+  //   root
+  //   ├── a (fork at 1)
+  //   │   └── a1 (fork at 3)
+  //   └── b (fork at 0)
+  const root = await newRun();
+  const a = await insertFork(root.id, 1);
+  const a1 = await insertFork(a.id, 3);
+  const b = await insertFork(root.id, 0);
+  const unrelated = await newRun();
+
+  for (const from of [root, a, a1, b]) {
+    const res = await call('GET', `/api/runs/${from.id}/tree`);
+    assert.equal(res.status, 200);
+    assert.equal(res.body.root_id, root.id);
+    const byId = Object.fromEntries(res.body.runs.map((r) => [r.id, r]));
+    assert.deepEqual(Object.keys(byId).sort(), [root.id, a.id, a1.id, b.id].sort());
+    assert.equal(byId[a1.id].parent_run_id, a.id);
+    assert.equal(byId[a1.id].fork_step, 3);
+    assert.equal(byId[root.id].parent_run_id, null);
+  }
+
+  const alone = await call('GET', `/api/runs/${unrelated.id}/tree`);
+  assert.deepEqual(alone.body.runs.map((r) => r.id), [unrelated.id]);
+
+  assert.equal((await call('GET', '/api/runs/not-a-uuid/tree')).status, 400);
+  assert.equal((await call('GET', '/api/runs/00000000-0000-0000-0000-000000000000/tree')).status, 404);
+});
