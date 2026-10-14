@@ -225,3 +225,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Back and forward buttons work, and a run's URL can be shared or bookmarked. Later phases add more pages (diff, failures dashboard), so a hand-written router would keep growing.
 
 **Rejected:** About 15 lines of home-made routing on `location.hash`. It needs no dependency, but it means maintaining my own router.
+
+## The timeline shows only the messages that are new at each LLM step
+
+**Decision:** For an LLM step, the detail panel shows the response first. Below it are only the request messages added since the previous LLM step, which is usually the assistant's last reply plus the tool results. A toggle shows the full conversation, and the raw request and response JSON are always available.
+
+**Why:** Every chat completion request resends the whole history, so step 2 of a short run already carries 19 messages, and later steps repeat everything before them. The new messages are what the model saw for the first time, and that's what you need when asking "why did it do that here?". The count comes from the previous LLM step's `messages.length`, so no extra data is stored.
+
+**Rejected:** Showing every message of every request, which buries the change under repeated history. Also rejected: diffing requests on the server and storing the difference, which is extra schema for something the UI can work out.
+
+## The selected step is in the URL
+
+**Decision:** The run page keeps the selected step in the query string (`/runs/:id?step=2`).
+
+**Why:** A link can point at the exact step where an agent went wrong, and reloading keeps your place. It's one `useSearchParams` call.
+
+**Rejected:** Keeping the selection in React state only, which is lost on reload and can't be shared.
