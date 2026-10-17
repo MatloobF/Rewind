@@ -1,8 +1,8 @@
 """Turn recorded runs into a flat list of failures, each with a text signature.
 
-The signature is what step 4 embeds and clusters, so it keeps the meaning of
-an error (which tool, what went wrong) and drops details that differ between
-runs (UUIDs, numbers, file names).
+The signature is what clusters.py embeds and groups, so it keeps the kind of
+error and drops details that differ between runs (UUIDs, numbers, file names,
+the value a tool error names).
 """
 
 import json
@@ -32,8 +32,18 @@ def normalize(message: str) -> str:
 
 
 def signature(step: dict, message: str) -> str:
-    where = f"tool {step['tool']}" if step["type"] == "tool" else "llm"
-    return f"{where}: {normalize(message)}"
+    """The normalised message, without the tool name.
+
+    Tool errors follow a "Description: value" convention ("Not found: a.txt",
+    "Unknown tool: rename_file"), so the text after the last ": " becomes
+    <value>. LLM errors keep theirs: "upstream HTTP 404: model not found" is
+    the useful part. The tool name is left out because it dominated the
+    embeddings: errors grouped by tool instead of by kind of error.
+    """
+    sig = normalize(message)
+    if step["type"] == "tool" and ": " in sig:
+        sig = sig.rsplit(": ", 1)[0] + ": <value>"
+    return sig
 
 
 def run_failures(run: dict, steps: list[dict]) -> list[dict]:
@@ -62,8 +72,7 @@ def run_failed(run: dict, last: dict | None) -> dict:
         message = f"run failed during {last['type']} step (no response)"
     else:
         message = f"run failed after {last['type']} step"
-    sig = message if last is None or last["type"] == "llm" else f"tool {last['tool']}: {message}"
-    return failure(run, last, "run_failed", message, sig)
+    return failure(run, last, "run_failed", message, message)
 
 
 def failure(run: dict, step: dict | None, source: str, message: str, sig: str) -> dict:

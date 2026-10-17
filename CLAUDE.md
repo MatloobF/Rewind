@@ -80,6 +80,7 @@ cd examples/agent && npm install                      # sample agent deps (opena
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
 cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open, fork replay/override and fail-closed; no Postgres)
 cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files
+cd examples/agent && npm run seed:failures            # record 10 scripted failing runs via the API for the intel service (server must be running; --force to add again)
 cd examples/agent && npm test                         # sample agent tests (safePath, tools, seed, loop, MCP server + client)
 node examples/agent/index.js "sort the files"         # run the sample agent directly (~3 min on CPU)
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)

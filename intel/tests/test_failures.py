@@ -36,12 +36,24 @@ def test_errored_steps_become_failures_with_signatures():
     ]
     failures = run_failures(RUN, steps)
     assert [f["signature"] for f in failures] == [
-        "tool move_file: Already exists, not overwriting: images",
-        "llm: upstream request failed: UND_ERR_HEADERS_TIMEOUT",
+        "Already exists, not overwriting: <value>",
+        "upstream request failed: UND_ERR_HEADERS_TIMEOUT",
     ]
+    assert failures[0]["tool"] == "move_file"  # kept for display, just not in the signature
     assert failures[0]["idx"] == 1
     assert failures[0]["message"] == "Already exists, not overwriting: images"
     assert failures[0]["source"] == "step_error"
+
+
+def test_tool_error_value_is_dropped_but_llm_error_detail_is_kept():
+    steps = [
+        step(0, tool="read_file", error='{"error":"Unknown tool: rename_file"}'),
+        step(1, type="llm", error="upstream HTTP 404: model not found"),
+    ]
+    assert [f["signature"] for f in run_failures(RUN, steps)] == [
+        "Unknown tool: <value>",
+        "upstream HTTP <n>: model not found",
+    ]
 
 
 def test_replayed_errors_belong_to_the_parent():
@@ -61,7 +73,7 @@ def test_failed_run_without_a_step_error_gets_a_run_failure():
     assert len(failures) == 1
     assert failures[0]["source"] == "run_failed"
     assert failures[0]["idx"] == 1
-    assert failures[0]["signature"] == "tool list_files: run failed after tool step"
+    assert failures[0]["signature"] == "run failed after tool step"
 
 
 def test_failed_run_that_died_mid_call():

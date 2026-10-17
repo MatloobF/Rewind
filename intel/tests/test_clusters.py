@@ -4,13 +4,13 @@ from clusters import cluster_failures
 
 # Hand-picked vectors stand in for the model: two tight families and one outlier.
 VECTORS = {
-    "tool move_file: Already exists: images": [1.0, 0.02, 0.0],
-    "tool move_file: Already exists: documents": [1.0, 0.0, 0.03],
-    "tool move_file: Already exists: notes": [1.0, 0.03, 0.02],
-    "llm: upstream request failed: TIMEOUT": [0.0, 1.0, 0.02],
-    "llm: upstream request failed: ECONNREFUSED": [0.02, 1.0, 0.0],
-    "llm: upstream request failed: 502": [0.03, 1.0, 0.03],
-    "tool delete_everything: Unknown tool": [0.0, 0.0, 1.0],
+    "Already exists, not overwriting: images": [1.0, 0.02, 0.0],
+    "Already exists, not overwriting: documents": [1.0, 0.0, 0.03],
+    "Already exists, not overwriting: notes": [1.0, 0.03, 0.02],
+    "upstream request failed: TIMEOUT": [0.0, 1.0, 0.02],
+    "upstream request failed: ECONNREFUSED": [0.02, 1.0, 0.0],
+    "upstream request failed: 502": [0.03, 1.0, 0.03],
+    "Unknown tool: <value>": [0.0, 0.0, 1.0],
 }
 
 
@@ -29,36 +29,36 @@ def test_similar_signatures_form_clusters_and_outliers_stay_single():
     kinds = sorted((p["kind"], p["size"]) for p in patterns)
     assert kinds == [("cluster", 3), ("cluster", 3), ("single", 1)]
     single = next(p for p in patterns if p["kind"] == "single")
-    assert single["label"] == "tool delete_everything: Unknown tool"
+    assert single["label"] == "Unknown tool: <value>"
 
 
 def test_identical_failures_are_counted_not_reclustered():
     # Three copies of one timeout plus the families: still one pattern per family.
     failures = [failure(s, idx=i) for i, s in enumerate(VECTORS)]
-    failures += [failure("llm: upstream request failed: TIMEOUT", run="r2", idx=9)] * 2
+    failures += [failure("upstream request failed: TIMEOUT", run="r2", idx=9)] * 2
     patterns = cluster_failures(failures, fake_embed)
-    llm = next(p for p in patterns if p["label"].startswith("llm"))
-    assert llm["size"] == 5
-    assert llm["run_count"] == 2
-    assert llm["label"] == "llm: upstream request failed: TIMEOUT"  # the most common signature
-    assert llm["signatures"][0] == {"signature": "llm: upstream request failed: TIMEOUT", "count": 3}
+    upstream = next(p for p in patterns if p["label"].startswith("upstream"))
+    assert upstream["size"] == 5
+    assert upstream["run_count"] == 2
+    assert upstream["label"] == "upstream request failed: TIMEOUT"  # the most common signature
+    assert upstream["signatures"][0] == {"signature": "upstream request failed: TIMEOUT", "count": 3}
 
 
 def test_patterns_are_sorted_by_size_with_ids():
-    failures = [failure(s) for s in VECTORS] + [failure("tool move_file: Already exists: images")] * 4
+    failures = [failure(s) for s in VECTORS] + [failure("Already exists, not overwriting: images")] * 4
     patterns = cluster_failures(failures, fake_embed)
     assert [p["id"] for p in patterns] == list(range(len(patterns)))
     sizes = [p["size"] for p in patterns]
     assert sizes == sorted(sizes, reverse=True)
-    assert patterns[0]["label"] == "tool move_file: Already exists: images"
+    assert patterns[0]["label"] == "Already exists, not overwriting: images"
 
 
 def test_too_few_signatures_skip_clustering():
     def must_not_embed(texts):
         raise AssertionError("embed called with fewer than 3 signatures")
 
-    failures = [failure("llm: upstream request failed: TIMEOUT")] * 3 + [
-        failure("tool delete_everything: Unknown tool")
+    failures = [failure("upstream request failed: TIMEOUT")] * 3 + [
+        failure("Unknown tool: <value>")
     ]
     patterns = cluster_failures(failures, must_not_embed)
     assert [(p["kind"], p["size"]) for p in patterns] == [("single", 3), ("single", 1)]

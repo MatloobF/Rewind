@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test",
-    "seed": "node seed.js"
+    "seed": "node seed.js",
+    "seed:failures": "node seed-failures.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
