@@ -449,3 +449,11 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Every assertion type has exactly one field, so a row per assertion is simpler to use than a JSON editor and needs no schema code beyond a small `FIELDS` table. Keeping the server as the only validator means the rules live in one place (`assertions.js`). The form mounts once with the draft's rows, so a background refetch never overwrites edits. The run page has worked without Python since Phase 6, and creating an eval shouldn't be the exception. The panel remembers which run it's open for, because the run page stays mounted when moving between runs.
 
 **Rejected:** A Monaco JSON editor for the assertions (flexible, but easy to get wrong and hides the reasons), and repeating the server's validation in the browser (two copies of the rules to keep in sync).
+
+## First real eval: the drafted checks held, the hand-written phrase didn't
+
+**What happened:** Eval f7c1c065, drafted from run 797e8e4d plus one hand-added `final_output_contains "sorted"`, was run once on the real agent (`rewind eval`, Ollama on CPU, about 3 minutes). Setup reseeded the sandbox, and the agent sorted all 11 files correctly in 18 steps with no tool errors, so the six drafted assertions passed. The eval still failed, because the agent's answer said "organized" and "moved", not "sorted".
+
+**Why it matters:** This is the case the draft rules were written for. Checks on structure (status, step count, which tools were called, tool errors) are stable across runs of a non-deterministic model, and checks on wording are not. It's why the draft never proposes `final_output_contains`: a phrase written for one run's wording turns a correct run red. The verdict stays as a real result, not something to patch in the checker. If a text check is wanted, it should be on a word the task forces (e.g. a file name), or left out.
+
+**Not changed:** the checker and the draft rules. A looser text match (any of several words, or similarity) would mean judging meaning, which Rule 8 keeps out of assertions.

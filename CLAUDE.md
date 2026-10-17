@@ -184,7 +184,7 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
 - [x] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
 - [x] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
-- [ ] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
+- [x] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
 - [ ] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
 - [ ] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
 - [ ] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.)
