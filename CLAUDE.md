@@ -74,8 +74,8 @@ cd web && npm run dev                                 # frontend on :5173, proxi
 cd web && npm test                                    # web logic tests (run diff alignment, loop descriptions; no browser, no server)
 cd intel && python -m venv .venv                      # once: Python virtualenv for the intel service (gitignored)
 cd intel && .venv/Scripts/python -m pip install -r requirements.txt   # intel deps (Windows path; .venv/bin/python on macOS/Linux)
-cd intel && .venv/Scripts/python -m pytest            # intel tests (health, read-only connection, loop detection, failure extraction, clustering with a fake embedder; needs Postgres)
-cd intel && .venv/Scripts/python -m uvicorn main:app --reload --port 8000   # Python service (GET /health, GET /runs/:id/loops, GET /failures, GET /failures/clusters; loads the embedding model in the background at startup, ~17 s)
+cd intel && .venv/Scripts/python -m pytest            # intel tests (health, read-only connection, loop detection, failure extraction, clustering with a fake embedder, eval drafts; needs Postgres)
+cd intel && .venv/Scripts/python -m uvicorn main:app --reload --port 8000   # Python service (GET /health, GET /runs/:id/loops, GET /runs/:id/eval-draft, GET /failures, GET /failures/clusters; loads the embedding model in the background at startup, ~17 s)
 cd examples/agent && npm install                      # sample agent deps (openai SDK, MCP SDK)
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
 cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open, fork replay/override and fail-closed; no Postgres)

@@ -59,3 +59,11 @@ def get_run_steps(run_id: UUID) -> list[dict] | None:
             " FROM steps WHERE run_id = %s ORDER BY idx",
             (run_id,),
         ).fetchall()
+
+
+def get_run(run_id: UUID) -> dict | None:
+    """A run's id, name, status and command (argv list), or None if it doesn't exist."""
+    with connect() as conn:
+        return conn.execute(
+            "SELECT id, name, status, command FROM runs WHERE id = %s", (run_id,)
+        ).fetchone()
