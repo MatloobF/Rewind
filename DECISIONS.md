@@ -347,3 +347,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** A fork reuses its parent's step numbers by design, so the same `idx` really is the same point in the run, and lining up by idx is the honest comparison. Reading the `replayed` flag keeps the page right when a fork diverged before its fork step and went live early. Comparing hashes after the fork shows how far an edit spread: in fork 9aaa4c86, every step after the edited `list_files` result sent a new request, because each LLM request carries the conversation so far.
 
 **Rejected:** An LCS-style match (like `diff`) that pairs steps by content. It could pair steps from different points in the run and hide where the fork changed things. It would also need a library or a bigger algorithm to explain. Also rejected: a text diff of the JSON inside each row. Showing both sides is enough for now and needs no dependency.
+
+## The intel service reads Postgres through a read-only connection
+
+**Decision:** `intel/db.py` opens every connection with `default_transaction_read_only=on`, so Postgres itself rejects INSERT, UPDATE and DELETE from the Python service. A test checks that an `UPDATE` raises `ReadOnlySqlTransaction`.
+
+**Why:** Rule 3 says the Python service only reads, and any writes go through the Node API. Enforcing that in the database means the rule holds even if someone later writes a wrong query here. It's one connection option, with no extra setup.
+
+**Rejected:** A separate Postgres role with only `SELECT` grants. It's stronger, but it needs a migration, a second password and a second `DATABASE_URL`, which is too much for a local dev setup. It's worth revisiting at deploy time (Phase 10).
+
+## Loop detection reuses request_hash and ignores errored LLM steps
+
+**Decision:** `intel/loops.py` reports two kinds of loop. A `tool_cycle` is one tool call, or a cycle of 2–3 calls, repeated at least 3 times back to back, comparing tool steps only. A `repeated_llm_request` is the exact same LLM request sent more than once. Calls are compared by the `request_hash` the Node server already stored, and LLM steps that errored don't count. It's served at `GET /runs/{id}/loops`.
+
+**Why:** Two tool calls have the same hash exactly when they have the same name and arguments, so reusing it keeps one `hashRequest()` and avoids a Python copy of the canonical JSON that could drift. LLM steps are left out of cycle matching because each LLM request carries the growing conversation and never repeats, even when the agent is stuck. Errored LLM steps are skipped because of a real run: failed run e7cfcdd1 sent the same request 3 times, but those were the OpenAI SDK's automatic retries after upstream timeouts, not the agent looping. Errored tool calls do count, because the MCP proxy never retries, so a repeated failing call is the agent's own choice.
+
+**Rejected:** Matching on the tool name only, which would flag a normal run moving several files with `move_file`. Also rejected: a general repeated-substring search, which is harder to explain and finds odd cycles of no use. Periods up to 3 cover the stuck patterns seen in agents (A A A, A B A B).
