@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { formatMs, formatNumber } from '../format.js';
 import { stepState, stepSummary } from '../steps.js';
 
@@ -8,6 +9,13 @@ const STATE_DOT = {
 };
 
 export default function StepList({ steps, selectedIdx, onSelect }) {
+  // Keep the selected step visible when it's chosen from elsewhere (the loop
+  // warning, a ?step= link). 'nearest' does nothing if it's already in view.
+  const selectedRef = useRef(null);
+  useEffect(() => {
+    selectedRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [selectedIdx]);
+
   return (
     <ol className="space-y-1">
       {steps.map((step) => {
@@ -16,6 +24,7 @@ export default function StepList({ steps, selectedIdx, onSelect }) {
           <li key={step.idx}>
             <button
               type="button"
+              ref={selected ? selectedRef : null}
               onClick={() => onSelect(step.idx)}
               className={`w-full rounded px-3 py-2 text-left ${selected ? 'bg-zinc-800' : 'hover:bg-zinc-900'}`}
             >
