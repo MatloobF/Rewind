@@ -3,3 +3,5 @@ uvicorn>=0.32
 psycopg[binary]>=3.2
 pytest>=8.3
 httpx>=0.28
+sentence-transformers>=3.3
+scikit-learn>=1.5
