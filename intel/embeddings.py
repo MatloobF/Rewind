@@ -1,11 +1,12 @@
 """Sentence embeddings with all-MiniLM-L6-v2, running locally on CPU (free, Rule 11).
 
-The model (~90 MB) is downloaded on first use into the Hugging Face cache and
-loaded lazily, so /health and the tests never pay for importing torch.
+The model (~90 MB) is downloaded on first use into the Hugging Face cache.
+torch is only imported inside get_model(), which the server calls in a startup
+thread (main.py), so /health and the tests never pay for importing it.
 """
 
 import os
-from functools import lru_cache
+import threading
 
 import numpy as np
 
@@ -14,13 +15,18 @@ os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
 MODEL_NAME = "all-MiniLM-L6-v2"
 _cache: dict[str, np.ndarray] = {}  # signature -> vector; signatures repeat a lot
+_model = None
+_model_lock = threading.Lock()  # main.py warms the model in a thread; a request may arrive mid-load
 
 
-@lru_cache(maxsize=1)
 def get_model():
-    from sentence_transformers import SentenceTransformer
+    global _model
+    with _model_lock:
+        if _model is None:
+            from sentence_transformers import SentenceTransformer
 
-    return SentenceTransformer(MODEL_NAME, device="cpu")
+            _model = SentenceTransformer(MODEL_NAME, device="cpu")
+        return _model
 
 
 def embed(texts: list[str]) -> np.ndarray:

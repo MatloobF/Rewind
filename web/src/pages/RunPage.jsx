@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { fetchRun } from '../api.js';
 import BranchGraph from '../components/BranchGraph.jsx';
+import LoopWarning from '../components/LoopWarning.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import StepDetail from '../components/StepDetail.jsx';
 import StepList from '../components/StepList.jsx';
@@ -26,6 +27,7 @@ export default function RunPage() {
   const requested = Number(searchParams.get('step'));
   const selected = steps.find((s) => s.idx === requested) ?? steps[0];
   const sum = (field) => steps.reduce((total, s) => total + (s[field] ?? 0), 0);
+  const selectStep = (idx) => setSearchParams({ step: String(idx) }, { replace: true });
 
   return (
     <div>
@@ -60,6 +62,8 @@ export default function RunPage() {
         {formatNumber(sum('tokens_out'))} out · {formatMs(sum('latency_ms'))} call time
       </p>
 
+      <LoopWarning run={run} onSelectStep={selectStep} />
+
       <BranchGraph runId={run.id} />
 
       {steps.length === 0 ? (
@@ -70,7 +74,7 @@ export default function RunPage() {
             <StepList
               steps={steps}
               selectedIdx={selected.idx}
-              onSelect={(idx) => setSearchParams({ step: String(idx) }, { replace: true })}
+              onSelect={selectStep}
             />
           </aside>
           <div className="min-w-0">

@@ -4,14 +4,18 @@
 async function getJson(path) {
   const res = await fetch(path);
   const body = await res.json().catch(() => null);
-  // The API answers errors with { error: message }.
-  if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+  // The API answers errors with { error: message }; FastAPI (intel) with { detail }.
+  if (!res.ok) throw new Error(body?.error ?? body?.detail ?? `HTTP ${res.status}`);
   return body;
 }
 
 export const fetchRuns = () => getJson('/api/runs');
 export const fetchRun = (id) => getJson(`/api/runs/${id}`);
 export const fetchRunTree = (id) => getJson(`/api/runs/${id}/tree`);
+
+// The Python intel service, proxied by Vite at /intel.
+export const fetchFailurePatterns = () => getJson('/intel/failures/clusters');
+export const fetchRunLoops = (id) => getJson(`/intel/runs/${id}/loops`);
 
 async function postJson(path, body) {
   const res = await fetch(path, {

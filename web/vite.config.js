@@ -7,9 +7,14 @@ export default defineConfig({
   server: {
     port: 5173,
     // The browser only talks to Vite; Vite forwards /api to the Rewind
-    // server. Same origin means the server needs no CORS setup.
+    // server and /intel to the Python intel service. Same origin means
+    // neither needs CORS setup.
     proxy: {
       '/api': 'http://localhost:4000',
+      '/intel': {
+        target: 'http://localhost:8000',
+        rewrite: (path) => path.replace(/^\/intel/, ''),
+      },
     },
   },
 });
