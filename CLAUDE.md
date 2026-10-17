@@ -98,7 +98,8 @@ Update this section when scripts are added or renamed.
 - `REWIND_SERVER_URL`: Rewind server URL used by the CLI and MCP proxy, and by the server itself to tell forked agents where it is (default `http://localhost:4000`)
 - `REWIND_RUN_ID`: set by the CLI (or the server, for forks) for each run; used by the MCP proxy
 - `REWIND_BASE_URL`: set by the CLI; the agent uses it as its LLM base URL
-- `INTEL_URL`: Python service URL (default `http://localhost:8000`)
+- `INTEL_URL`: Python service URL (default `http://localhost:8000`). Not read yet: the Vite dev proxy sends `/intel` to `:8000` directly. Wire it up when deploying (Phase 10).
+- The intel service reads `DATABASE_URL` from the real environment only, not from `.env` (the Node scripts load `../.env` with `--env-file`). If your `.env` points somewhere other than the default, set it in the shell before starting uvicorn.
 
 Never commit real API keys. Keep secrets in `.env` (gitignored) and document every variable in `.env.example`. Never expose secrets to the frontend: in Vite, any `VITE_` variable is bundled into the browser.
 
@@ -177,7 +178,7 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 3:** REST API (`/api/runs`, `/api/runs/:id`, `/api/runs/:id/tree` via recursive CTE) + React run list and timeline
 - [x] **Phase 4:** MCP proxy; move sample agent's tools to MCP. Bonus demo: add the proxy to Claude Code (`claude mcp add`) or Cursor's MCP config and record their tool calls.
 - [x] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
-- [ ] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
+- [x] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
 - [ ] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
 - [ ] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
 - [ ] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
