@@ -72,7 +72,10 @@ cd server && npm run dev                              # proxy + API on :4000 (re
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000
 cd web && npm test                                    # web logic tests (run diff alignment; no browser, no server)
-cd intel && uvicorn main:app --reload --port 8000     # Python service
+cd intel && python -m venv .venv                      # once: Python virtualenv for the intel service (gitignored)
+cd intel && .venv/Scripts/python -m pip install -r requirements.txt   # intel deps (Windows path; .venv/bin/python on macOS/Linux)
+cd intel && .venv/Scripts/python -m pytest            # intel tests (health, read-only connection; needs Postgres)
+cd intel && .venv/Scripts/python -m uvicorn main:app --reload --port 8000   # Python service (GET /health)
 cd examples/agent && npm install                      # sample agent deps (openai SDK, MCP SDK)
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
 cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open, fork replay/override and fail-closed; no Postgres)
