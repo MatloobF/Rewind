@@ -1,4 +1,6 @@
 import { Link, NavLink, Route, Routes } from 'react-router';
+import EvalList from './pages/EvalList.jsx';
+import EvalPage from './pages/EvalPage.jsx';
 import Failures from './pages/Failures.jsx';
 import RunDiff from './pages/RunDiff.jsx';
 import RunList from './pages/RunList.jsx';
@@ -21,6 +23,9 @@ export default function App() {
             <NavLink to="/failures" className={navClass}>
               Failures
             </NavLink>
+            <NavLink to="/evals" className={navClass}>
+              Evals
+            </NavLink>
           </nav>
         </div>
       </header>
@@ -30,6 +35,8 @@ export default function App() {
           <Route path="/runs/:id" element={<RunPage />} />
           <Route path="/runs/:id/diff" element={<RunDiff />} />
           <Route path="/failures" element={<Failures />} />
+          <Route path="/evals" element={<EvalList />} />
+          <Route path="/evals/:id" element={<EvalPage />} />
           <Route path="*" element={<p className="text-zinc-400">Page not found.</p>} />
         </Routes>
       </main>

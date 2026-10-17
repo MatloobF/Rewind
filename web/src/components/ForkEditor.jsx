@@ -3,12 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
 import Editor from '@monaco-editor/react';
 import { forkRun } from '../api.js';
-
-// The sample agent's reset script. Replayed tool steps don't run, so a fork
-// starts live in whatever state the sandbox is in now; resetting it first
-// makes a fork before the first file change start from the right files.
-const SAMPLE_SETUP = ['node', 'examples/agent/seed.js'];
-const isSampleAgent = (command) => command.some((arg) => arg.includes('examples/agent/index.js'));
+import { SAMPLE_SETUP, isSampleAgent, parseSetup } from '../setup.js';
 
 // What the user can edit at the fork step (see fork_override on the server):
 // the result the agent gets back, or the request that is sent live instead.
@@ -150,14 +145,3 @@ function replayedText(forkStep) {
   return `Steps 0–${forkStep - 1} are replayed from this run, `;
 }
 
-// The setup field holds a JSON argv array, e.g. ["node", "examples/agent/seed.js"].
-// JSON instead of a command line, so there's no shell-style quoting to parse.
-function parseSetup(text) {
-  try {
-    const argv = JSON.parse(text);
-    if (Array.isArray(argv) && argv.length > 0 && argv.every((a) => typeof a === 'string')) return { value: argv };
-  } catch {
-    // fall through to the message below
-  }
-  return { error: 'Setup must be a JSON array of strings, e.g. ["node", "examples/agent/seed.js"].' };
-}

@@ -30,3 +30,12 @@ async function postJson(path, body) {
 
 // Body: { fork_step, fork_override?, name?, setup? } -> the new fork run.
 export const forkRun = (id, body) => postJson(`/api/runs/${id}/fork`, body);
+
+export const fetchEvals = () => getJson('/api/evals');
+export const fetchEval = (id) => getJson(`/api/evals/${id}`);
+// Proposed assertions for a finished run, from the intel service. Not saved.
+export const fetchEvalDraft = (runId) => getJson(`/intel/runs/${runId}/eval-draft`);
+// Body: { source_run_id, input_task, assertions, setup? } -> the new eval.
+export const createEval = (body) => postJson('/api/evals', body);
+// Starts a live run of the eval -> { run, result } (result.passed is null until it's checked).
+export const runEval = (id) => postJson(`/api/evals/${id}/runs`);

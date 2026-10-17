@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { fetchRun } from '../api.js';
 import BranchGraph from '../components/BranchGraph.jsx';
+import EvalEditor from '../components/EvalEditor.jsx';
 import LoopWarning from '../components/LoopWarning.jsx';
 import StatusBadge from '../components/StatusBadge.jsx';
 import StepDetail from '../components/StepDetail.jsx';
@@ -12,6 +14,10 @@ export default function RunPage() {
   const { id } = useParams();
   // The selected step lives in the URL (?step=2) so it can be linked.
   const [searchParams, setSearchParams] = useSearchParams();
+  // Which run the "Create eval" panel is open for, so it closes when the
+  // page moves to another run (the component stays mounted).
+  const [evalPanelFor, setEvalPanelFor] = useState(null);
+  const creatingEval = evalPanelFor === id;
 
   const { data: run, error, isPending } = useQuery({
     queryKey: ['run', id],
@@ -41,6 +47,17 @@ export default function RunPage() {
         {run.diverged_at_step != null && (
           <span className="text-sm text-amber-300">diverged at step {run.diverged_at_step}</span>
         )}
+        {!creatingEval && (
+          <button
+            type="button"
+            onClick={() => setEvalPanelFor(id)}
+            disabled={run.status === 'running'}
+            title={run.status === 'running' ? 'Wait until the run has finished' : 'Turn this run into a regression test'}
+            className="ml-auto rounded border border-emerald-500/50 px-3 py-1 text-sm text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-40"
+          >
+            Create eval
+          </button>
+        )}
       </div>
       {run.parent_run_id && (
         <p className="mt-1 text-sm text-violet-300">
@@ -61,6 +78,8 @@ export default function RunPage() {
         {formatDate(run.created_at)} · {steps.length} steps · {formatNumber(sum('tokens_in'))} in /{' '}
         {formatNumber(sum('tokens_out'))} out · {formatMs(sum('latency_ms'))} call time
       </p>
+
+      {creatingEval && <EvalEditor run={run} onCancel={() => setEvalPanelFor(null)} />}
 
       <LoopWarning run={run} onSelectStep={selectStep} />
 
