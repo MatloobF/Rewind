@@ -23,6 +23,32 @@ def connect() -> psycopg.Connection:
     )
 
 
+def get_failure_candidates(limit: int = 500) -> list[tuple[dict, list[dict]]]:
+    """Recent finished runs that failed or have a live (non-replayed) step error,
+    each with its steps. Only the small columns are read: LLM requests carry the
+    whole conversation and aren't needed here.
+    """
+    with connect() as conn:
+        runs = conn.execute(
+            "SELECT id, name, status FROM runs r"
+            " WHERE r.status = 'failed' OR (r.status <> 'running' AND EXISTS ("
+            "   SELECT 1 FROM steps s"
+            "   WHERE s.run_id = r.id AND s.error IS NOT NULL AND NOT s.replayed))"
+            " ORDER BY r.created_at DESC LIMIT %s",
+            (limit,),
+        ).fetchall()
+        steps = conn.execute(
+            "SELECT run_id, idx, type, request->>'name' AS tool, error,"
+            " response IS NULL AS no_response, replayed"
+            " FROM steps WHERE run_id = ANY(%s) ORDER BY run_id, idx",
+            ([r["id"] for r in runs],),
+        ).fetchall()
+    by_run: dict = {r["id"]: [] for r in runs}
+    for s in steps:
+        by_run[s["run_id"]].append(s)
+    return [(r, by_run[r["id"]]) for r in runs]
+
+
 def get_run_steps(run_id: UUID) -> list[dict] | None:
     """A run's steps in idx order, or None if the run doesn't exist."""
     with connect() as conn:
