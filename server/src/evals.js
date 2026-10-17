@@ -1,5 +1,7 @@
-import { pool } from './db.js';
+import { pool, withTransaction } from './db.js';
 import { notFound, conflict } from './errors.js';
+import { getRun } from './runs.js';
+import { checkAssertions } from './assertions.js';
 
 // Creates an eval from a finished run. Like a fork, it copies the run's
 // command and cwd, so the eval re-launches the same agent and task, and
@@ -67,4 +69,49 @@ export async function getEval(evalId) {
     [evalId],
   );
   return { ...rows[0], results };
+}
+
+// Starts one run of an eval: a new live run (no parent, nothing replayed)
+// with the eval's command and cwd, plus its result row with passed NULL.
+// Both are created together, so a result never points at a missing run and
+// a run started for an eval always has its result row.
+// Returns { evalRow, run, result }; the caller launches the agent.
+export async function startEvalRun(evalId) {
+  return withTransaction(async (client) => {
+    const { rows } = await client.query('SELECT * FROM evals WHERE id = $1', [evalId]);
+    if (rows.length === 0) throw notFound(`eval ${evalId} not found`);
+    const evalRow = rows[0];
+
+    const { rows: runs } = await client.query(
+      `INSERT INTO runs (name, command, cwd) VALUES ($1, $2, $3) RETURNING *`,
+      [`[eval] ${evalRow.input_task}`, JSON.stringify(evalRow.command), evalRow.cwd],
+    );
+    const run = runs[0];
+    const { rows: results } = await client.query(
+      `INSERT INTO eval_results (eval_id, run_id) VALUES ($1, $2) RETURNING *`,
+      [evalId, run.id],
+    );
+    return { evalRow, run, result: results[0] };
+  });
+}
+
+// Checks a finished eval run against its eval's assertions and saves the
+// verdict on its result row. Returns the updated row.
+export async function checkEvalResult(resultId) {
+  const { rows } = await pool.query(
+    `SELECT er.run_id, e.assertions
+     FROM eval_results er JOIN evals e ON e.id = er.eval_id
+     WHERE er.id = $1`,
+    [resultId],
+  );
+  if (rows.length === 0) throw notFound(`eval result ${resultId} not found`);
+  const { run_id, assertions } = rows[0];
+
+  const run = await getRun(run_id);
+  const { passed, failures } = checkAssertions(run, run.steps, assertions);
+  const { rows: updated } = await pool.query(
+    `UPDATE eval_results SET passed = $2, failures = $3 WHERE id = $1 RETURNING *`,
+    [resultId, passed, JSON.stringify(failures)],
+  );
+  return updated[0];
 }

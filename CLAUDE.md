@@ -67,7 +67,7 @@ ollama serve                                          # start local LLM (if not 
 ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
 cd server && npm install                              # server deps (express, pg)
 cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run, and to run from several processes at once)
-cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy, eval API, assertion checker; needs Postgres, not Ollama)
+cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy, eval API, assertion checker, eval runs and `rewind eval`; needs Postgres, not Ollama)
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000 and /intel to :8000 (failures page at /failures)
@@ -87,6 +87,8 @@ node examples/agent/mcp-server.js                     # the file tools as a stdi
 node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
 cd server && npm link                                 # once: installs the `rewind` command globally
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run, LLM + tool steps (server must be running)
+rewind eval <eval-id>...                              # run saved evals one at a time, print PASS/FAIL and why; exit 0 only if all pass (server must be running; the agent's output shows in the server's terminal)
+rewind eval --all                                     # run every saved eval, oldest first
 ```
 
 Update this section when scripts are added or renamed.
@@ -150,6 +152,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
 - `POST /api/runs/:id/fork`: fork a finished run. Body `{ fork_step, fork_override?, name?, setup? }`; `setup` is an optional argv run (no shell, in the run's `cwd`) before the agent, e.g. `["node", "examples/agent/seed.js"]`. Returns 201 with the new run at once; the server launches the agent in the background and sets the status when it exits (Phase 5). Replayed tool steps don't run, so `setup` resets the world to the run's start, not to its state at the fork step; a fork after a file-changing tool call starts from the wrong state.
 - `POST /api/evals`: save an eval from a finished run. Body `{ source_run_id, input_task, assertions, setup? }`; copies the run's `command` and `cwd`. 404 for an unknown run, 409 for a running one (Phase 7)
+- `POST /api/evals/:id/runs`: run an eval. Creates a fresh live run named `[eval] <input_task>` (no parent, nothing replayed) and its `eval_results` row with `passed` NULL, returns 201 `{ run, result }` at once, launches the agent after the eval's `setup`, and fills in `passed` and `failures` when it exits. Run evals that share files one at a time (`rewind eval` does).
 - `GET /api/evals` (each with `latest_result` and `result_count` / `checked_count` / `passed_count`), `GET /api/evals/:id` (with all `results`, newest first, each with `run_status`)
 
 ## Key design rules (do not break these)

@@ -1,14 +1,18 @@
-// The `rewind` CLI. For now one command:
+// The `rewind` CLI:
 //
 //   rewind run [--name <name>] -- <command> [args...]
+//   rewind eval <eval-id>... | --all          (see evalCommand.js)
 //
-// Creates a run, launches the agent with its LLM base URL pointed at the
-// recording proxy, and sets the run's status from the agent's exit code.
+// `run` creates a run, launches the agent with its LLM base URL pointed at
+// the recording proxy, and sets the run's status from the agent's exit code.
 // The CLI talks only to the Rewind API, never to Postgres directly.
 // Its own messages go to stderr, so the agent's stdout stays clean.
 import { spawn } from 'node:child_process';
+import { callApi, log } from './apiClient.js';
+import { parseEvalArgs, runEvalCommand, EVAL_USAGE } from './evalCommand.js';
 
 const USAGE = 'usage: rewind run [--name <name>] -- <command> [args...]';
+const ALL_USAGE = `${USAGE}\n       ${EVAL_USAGE}`;
 
 // Parses `run` arguments. Everything after `--` is the agent's argv, passed
 // to spawn as-is (no shell), so quotes and spaces survive untouched.
@@ -29,19 +33,6 @@ export function parseRunArgs(args) {
   }
   return { name, command };
 }
-
-async function callApi(serverUrl, method, path, body) {
-  const res = await fetch(`${serverUrl}${path}`, {
-    method,
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(`${method} ${path} failed with ${res.status}: ${data.error}`);
-  return data;
-}
-
-const log = (message) => console.error(`[rewind] ${message}`);
 
 // Records one run of `command`. Resolves with the exit code the CLI should
 // use: the agent's own code, or 1 if it couldn't start, or 130 on Ctrl+C.
@@ -100,17 +91,20 @@ export async function recordRun({ name, command, cwd = process.cwd(), serverUrl 
 
 export async function main(args) {
   const [subcommand, ...rest] = args;
-  if (subcommand !== 'run') {
-    log(USAGE);
+  const parsers = { run: parseRunArgs, eval: parseEvalArgs };
+  const parse = Object.hasOwn(parsers, subcommand) ? parsers[subcommand] : null;
+  if (!parse) {
+    log(ALL_USAGE);
     return 1;
   }
   let parsed;
   try {
-    parsed = parseRunArgs(rest);
+    parsed = parse(rest);
   } catch (err) {
     log(err.message);
     return 1;
   }
   const serverUrl = (process.env.REWIND_SERVER_URL || 'http://localhost:4000').replace(/\/+$/, '');
+  if (subcommand === 'eval') return runEvalCommand({ ...parsed, serverUrl });
   return recordRun({ ...parsed, serverUrl });
 }

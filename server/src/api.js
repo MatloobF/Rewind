@@ -5,7 +5,7 @@ import { badRequest } from './errors.js';
 import { createRun, createFork, setRunStatus, listRuns, getRun, getRunTree } from './runs.js';
 import { launchRun } from './launcher.js';
 import { startStep, finishStep } from './steps.js';
-import { createEval, listEvals, getEval } from './evals.js';
+import { createEval, listEvals, getEval, startEvalRun, checkEvalResult } from './evals.js';
 import { assertionsError } from './assertions.js';
 import { isUuid, isPlainObject, isArgv } from './validate.js';
 
@@ -13,6 +13,11 @@ const FINAL_STATUSES = ['success', 'failed'];
 const STEP_TYPES = ['llm', 'tool'];
 
 const isCount = (v) => v == null || (Number.isInteger(v) && v >= 0);
+
+function evalIdParam(req) {
+  if (!isUuid(req.params.id)) throw badRequest('eval id must be a UUID');
+  return req.params.id;
+}
 
 function runIdParam(req) {
   if (!isUuid(req.params.id)) throw badRequest('run id must be a UUID');
@@ -100,8 +105,7 @@ api.get('/evals', async (req, res) => {
 
 // One eval with all its results, newest first.
 api.get('/evals/:id', async (req, res) => {
-  if (!isUuid(req.params.id)) throw badRequest('eval id must be a UUID');
-  res.json(await getEval(req.params.id));
+  res.json(await getEval(evalIdParam(req)));
 });
 
 // Save an eval made from a finished run.
@@ -119,4 +123,22 @@ api.post('/evals', async (req, res) => {
   if (setup != null && !isArgv(setup)) throw badRequest('setup must be a non-empty array of strings');
 
   res.status(201).json(await createEval({ sourceRunId: source_run_id, inputTask: input_task, assertions, setup }));
+});
+
+// Run an eval: a new live run of its command, after its setup. Answers at
+// once with { run, result } (result.passed is NULL); when the agent exits,
+// the server checks the assertions and fills in passed and failures.
+// Evals sharing files (like the sample agent's sandbox) should be run one
+// at a time; `rewind eval --all` does that.
+api.post('/evals/:id/runs', async (req, res) => {
+  const { evalRow, run, result } = await startEvalRun(evalIdParam(req));
+  res.status(201).json({ run, result });
+
+  await launchRun(run, { serverUrl: req.app.locals.serverUrl, setup: evalRow.setup });
+  try {
+    const checked = await checkEvalResult(result.id);
+    console.error(`[rewind] eval ${evalRow.id} ${checked.passed ? 'passed' : 'failed'} (run ${run.id})`);
+  } catch (err) {
+    console.error(`[rewind] could not check eval result ${result.id}: ${err.message}`);
+  }
 });
