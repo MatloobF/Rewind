@@ -6,7 +6,8 @@ import { createRun, createFork, setRunStatus, listRuns, getRun, getRunTree } fro
 import { launchRun } from './launcher.js';
 import { startStep, finishStep } from './steps.js';
 import { createEval, listEvals, getEval } from './evals.js';
-import { isUuid, isPlainObject, isArgv, assertionsError } from './validate.js';
+import { assertionsError } from './assertions.js';
+import { isUuid, isPlainObject, isArgv } from './validate.js';
 
 const FINAL_STATUSES = ['success', 'failed'];
 const STEP_TYPES = ['llm', 'tool'];

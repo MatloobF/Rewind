@@ -67,7 +67,7 @@ ollama serve                                          # start local LLM (if not 
 ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
 cd server && npm install                              # server deps (express, pg)
 cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run, and to run from several processes at once)
-cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy, eval API; needs Postgres, not Ollama)
+cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy, eval API, assertion checker; needs Postgres, not Ollama)
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000 and /intel to :8000 (failures page at /failures)

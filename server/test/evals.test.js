@@ -105,6 +105,9 @@ test('POST /api/evals validates its body', async () => {
     { assertions: {} },
     { assertions: ['max_steps'] },
     { assertions: [{ max: 3 }] },
+    { assertions: [{ type: 'must_not_loop' }] },
+    { assertions: [{ type: 'max_steps' }] },
+    { assertions: [{ type: 'must_call_tool', tool: 'x', args: {} }] },
     { setup: 'node seed.js' },
     { setup: [] },
   ]) {
