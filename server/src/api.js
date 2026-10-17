@@ -5,7 +5,8 @@ import { badRequest } from './errors.js';
 import { createRun, createFork, setRunStatus, listRuns, getRun, getRunTree } from './runs.js';
 import { launchRun } from './launcher.js';
 import { startStep, finishStep } from './steps.js';
-import { isUuid, isPlainObject, isArgv } from './validate.js';
+import { createEval, listEvals, getEval } from './evals.js';
+import { isUuid, isPlainObject, isArgv, assertionsError } from './validate.js';
 
 const FINAL_STATUSES = ['success', 'failed'];
 const STEP_TYPES = ['llm', 'tool'];
@@ -89,4 +90,32 @@ api.patch('/runs/:id/steps/:idx', async (req, res) => {
     if (!isCount(body[field])) throw badRequest(`${field} must be a non-negative integer`);
   }
   res.json(await finishStep(runId, idx, body));
+});
+
+// Evals, newest first, each with its latest result and pass counts.
+api.get('/evals', async (req, res) => {
+  res.json(await listEvals());
+});
+
+// One eval with all its results, newest first.
+api.get('/evals/:id', async (req, res) => {
+  if (!isUuid(req.params.id)) throw badRequest('eval id must be a UUID');
+  res.json(await getEval(req.params.id));
+});
+
+// Save an eval made from a finished run.
+// Body: { source_run_id, input_task, assertions: [...], setup?: string[] }
+// There is no route for writing results: only the server writes them, when
+// an eval run it launched exits.
+api.post('/evals', async (req, res) => {
+  const { source_run_id, input_task, assertions, setup = null } = req.body ?? {};
+  if (!isUuid(source_run_id)) throw badRequest('source_run_id must be a UUID');
+  if (typeof input_task !== 'string' || input_task.trim() === '') {
+    throw badRequest('input_task must be a non-empty string');
+  }
+  const message = assertionsError(assertions);
+  if (message) throw badRequest(message);
+  if (setup != null && !isArgv(setup)) throw badRequest('setup must be a non-empty array of strings');
+
+  res.status(201).json(await createEval({ sourceRunId: source_run_id, inputTask: input_task, assertions, setup }));
 });

@@ -27,3 +27,17 @@ export function forkOverrideError(override) {
 
 // An argv array for spawn (no shell): non-empty, strings only.
 export const isArgv = (v) => Array.isArray(v) && v.length > 0 && v.every((a) => typeof a === 'string');
+
+// An eval's assertions: a non-empty array of objects, each with a string
+// `type`. Step 2's checker adds the rules for each type.
+// Returns an error message, or null if the shape is valid.
+export function assertionsError(assertions) {
+  if (!Array.isArray(assertions) || assertions.length === 0) {
+    return 'assertions must be a non-empty array';
+  }
+  for (const [i, a] of assertions.entries()) {
+    if (!isPlainObject(a)) return `assertions[${i}] must be an object`;
+    if (typeof a.type !== 'string' || a.type === '') return `assertions[${i}].type must be a string`;
+  }
+  return null;
+}

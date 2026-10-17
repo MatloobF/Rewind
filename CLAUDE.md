@@ -66,8 +66,8 @@ docker compose up -d                                  # start Postgres
 ollama serve                                          # start local LLM (if not already running)
 ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
 cd server && npm install                              # server deps (express, pg)
-cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run)
-cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy; needs Postgres, not Ollama)
+cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run, and to run from several processes at once)
+cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy, eval API; needs Postgres, not Ollama)
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000 and /intel to :8000 (failures page at /failures)
@@ -118,8 +118,8 @@ Core tables below. Keep it this small unless there is a strong reason to split.
   - `replayed` (BOOLEAN, default false): true when the response was served from the parent run instead of a live call
   - `response` is NULL while a live call is in progress (step started, not finished). A step left NULL means the agent died mid-call.
   - `UNIQUE (run_id, idx)`
-- **`evals`** (Phase 7): `id`, `source_run_id`, `input_task`, `command` (JSONB argv), `cwd`, `assertions` (JSONB), `created_at`
-- **`eval_results`** (Phase 7): `id`, `eval_id`, `run_id`, `passed` (BOOLEAN), `failures` (JSONB: which assertions failed and why), `created_at`
+- **`evals`** (Phase 7): `id`, `source_run_id` (NULL once that run is deleted), `input_task` (a label; the task is in `command`), `command` (JSONB argv) and `cwd` (both copied from the source run), `setup` (JSONB argv or NULL, run before the agent, e.g. to reseed the sandbox), `assertions` (JSONB array), `created_at`
+- **`eval_results`** (Phase 7): `id`, `eval_id`, `run_id`, `passed` (BOOLEAN, NULL while the run is going), `failures` (JSONB: which assertions failed and why), `created_at`. Only the server writes these, when an eval run it launched exits.
 
 Indexes: `steps (run_id, idx)`, `runs (parent_run_id)`, `eval_results (eval_id, created_at)`. Add a GIN index on JSONB columns only if queries need it.
 
@@ -149,6 +149,8 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 2. All replay decisions are made in the server, in one place. The MCP proxy uses these two HTTP routes. The LLM proxy lives in the server, so it calls the same functions directly.
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
 - `POST /api/runs/:id/fork`: fork a finished run. Body `{ fork_step, fork_override?, name?, setup? }`; `setup` is an optional argv run (no shell, in the run's `cwd`) before the agent, e.g. `["node", "examples/agent/seed.js"]`. Returns 201 with the new run at once; the server launches the agent in the background and sets the status when it exits (Phase 5). Replayed tool steps don't run, so `setup` resets the world to the run's start, not to its state at the fork step; a fork after a file-changing tool call starts from the wrong state.
+- `POST /api/evals`: save an eval from a finished run. Body `{ source_run_id, input_task, assertions, setup? }`; copies the run's `command` and `cwd`. 404 for an unknown run, 409 for a running one (Phase 7)
+- `GET /api/evals` (each with `latest_result` and `result_count` / `checked_count` / `passed_count`), `GET /api/evals/:id` (with all `results`, newest first, each with `run_status`)
 
 ## Key design rules (do not break these)
 

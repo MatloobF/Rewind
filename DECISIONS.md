@@ -399,3 +399,19 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Going through the Vite proxy keeps everything same-origin, with no CORS and no extra Node code. The run page already works without Python, and a missing optional service shouldn't break it. A bar per row says "how big compared to the biggest", which is all this view needs, so `recharts` isn't worth a new dependency yet. Loading the model at startup moves the ~17 s wait away from the first page visit.
 
 **Rejected:** Having Node forward `/api/intel/*` (one origin for production, but an extra hop and more code; revisit at deploy time in Phase 10). Also rejected: a `recharts` bar chart (a new dependency for what CSS widths already show), and `functools.lru_cache` for the model, which doesn't make a second caller wait, so a request during startup would have loaded a second copy.
+
+## Evals copy their run's command, carry an optional setup, and a result starts with passed NULL
+
+**Decision:** An eval (`migrations/002_evals.sql`) copies `command` and `cwd` from the run it was made from, the way a fork does, and `source_run_id` is `ON DELETE SET NULL`. It also has a nullable `setup` argv column, not in the original schema, that runs before the agent in the same `cwd` (for the sample agent, `node examples/agent/seed.js`). `input_task` is only a label, since the task is already the last element of `command`. In `eval_results`, `passed` is NULL while the eval's run is going: the row is written when the server launches the run and filled in when the run exits and its assertions are checked. Results have no API route for writing; only the server writes them.
+
+**Why:** An eval is a frozen test case, so it should keep working after its source run is deleted, which is why it keeps its own copy of the command and isn't deleted with the run. `setup` exists because the sample agent changes the files it works on: without reseeding, the second run of an eval would start from an already-sorted sandbox and test something different. Forks already take `setup` per request, but for an eval it belongs to the test case itself. Writing the result row at launch lets the evals page show a run in progress. A row left NULL after a server crash matches how a run stays `running` after one.
+
+**Rejected:** Pointing at the source run instead of copying (deleting a run would break its evals). Also rejected: inserting the result only when the run finishes (simpler, but runs in progress would be invisible), and a results route the CLI posts to (a second writer for the same data).
+
+## Migrations take an advisory lock
+
+**Decision:** `migrate()` holds a Postgres advisory lock (`pg_advisory_lock(4000)`) on one connection while it reads `schema_migrations` and applies the pending files.
+
+**Why:** `node --test` runs each test file in its own process, and each calls `migrate()` in `before()`. The first time a migration was pending (002), several processes applied it at once, and all but one failed on `CREATE TABLE evals`. With the lock, one process applies it and the others wait, then find it already applied. The same holds for two servers starting together.
+
+**Rejected:** Running `npm run migrate` once before the tests (it hides the race instead of fixing it), and `CREATE TABLE IF NOT EXISTS` in migrations (a half-applied file would be skipped silently and the name check would still race).
