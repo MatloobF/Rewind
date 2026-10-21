@@ -1,6 +1,7 @@
 // LLM recording proxy, in two API formats:
 //   POST /r/:runId/v1/chat/completions   OpenAI format (Ollama, OpenAI, ...)
 //   POST /r/:runId/v1/messages           Anthropic format (Anthropic, Ollama)
+// Other /r/:runId/v1/... paths are passed through without recording.
 // Both work the same way. What differs (the upstream, the path, where the
 // token counts are, how a stream is read and replayed) is in FORMATS below.
 // The step's `format` records which one.
@@ -61,8 +62,39 @@ export function createProxy({ upstreamUrl, anthropicUpstreamUrl = upstreamUrl })
 
   proxy.post('/:runId/v1/chat/completions', (req, res) => handleCall(req, res, 'openai', upstreams.openai));
   proxy.post('/:runId/v1/messages', (req, res) => handleCall(req, res, 'anthropic', upstreams.anthropic));
+  // Anything else under /v1 (e.g. Claude Code's /v1/messages/count_tokens)
+  // is passed through unrecorded. The Anthropic SDK always sends
+  // anthropic-version, and /v1/models exists in both APIs, so the header
+  // picks the upstream, not the path.
+  proxy.all('/:runId/v1/*rest', (req, res) =>
+    passThrough(req, res, req.headers['anthropic-version'] ? upstreams.anthropic : upstreams.openai));
 
   return proxy;
+}
+
+// A side route: forwarded unchanged and answered unchanged (Rule 2), but not
+// a step. It isn't an LLM call the agent acts on, and giving it an idx would
+// make forks diverge whenever the agent calls it at a different moment.
+// It is always live, also while a fork is replaying.
+async function passThrough(req, res, upstream) {
+  if (!isUuid(req.params.runId)) throw badRequest('run id must be a UUID');
+  // req.url is relative to the router mount: /<runId>/v1/...?query
+  const path = req.url.slice(req.params.runId.length + 1);
+  const hasBody = Buffer.isBuffer(req.body) && req.body.length > 0;
+  let upstreamRes;
+  try {
+    upstreamRes = await fetch(`${upstream}${path}`, {
+      method: req.method,
+      headers: pickHeaders(req.headers),
+      body: hasBody ? req.body : undefined,
+    });
+  } catch (err) {
+    return res.status(502).json({ error: `upstream request failed: ${err.cause?.code ?? err.message}` });
+  }
+  const bodyBuffer = Buffer.from(await upstreamRes.arrayBuffer());
+  const contentType = upstreamRes.headers.get('content-type');
+  if (contentType) res.type(contentType);
+  res.status(upstreamRes.status).send(bodyBuffer);
 }
 
 // One LLM call, recorded as one 'llm' step in the given format.
