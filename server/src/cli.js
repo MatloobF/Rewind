@@ -8,6 +8,7 @@
 // The CLI talks only to the Rewind API, never to Postgres directly.
 // Its own messages go to stderr, so the agent's stdout stays clean.
 import { spawn } from 'node:child_process';
+import { agentEnv } from './agentEnv.js';
 import { callApi, log } from './apiClient.js';
 import { parseEvalArgs, runEvalCommand, EVAL_USAGE } from './evalCommand.js';
 
@@ -50,11 +51,7 @@ export async function recordRun({ name, command, cwd = process.cwd(), serverUrl 
   const child = spawn(command[0], command.slice(1), {
     cwd,
     stdio: 'inherit',
-    env: {
-      ...process.env,
-      REWIND_RUN_ID: run.id,
-      REWIND_BASE_URL: `${serverUrl}/r/${run.id}/v1`,
-    },
+    env: agentEnv(serverUrl, run.id),
   });
 
   // Ctrl+C: stop the agent; the run is marked failed when it exits. In a

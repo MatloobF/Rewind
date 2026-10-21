@@ -7,6 +7,7 @@
 // while an agent is running, that run stays 'running', the same as when
 // `rewind run` is killed hard.
 import { spawn } from 'node:child_process';
+import { agentEnv } from './agentEnv.js';
 import { setRunStatus } from './runs.js';
 
 const log = (message) => console.error(`[rewind] ${message}`);
@@ -27,13 +28,7 @@ export async function launchRun(run, { serverUrl, setup = null }) {
   if (status === null) {
     const code = await runProcess(run.command, {
       cwd: run.cwd,
-      env: {
-        ...process.env,
-        REWIND_RUN_ID: run.id,
-        REWIND_BASE_URL: `${serverUrl}/r/${run.id}/v1`,
-        // The agent passes this on to its MCP proxy.
-        REWIND_SERVER_URL: serverUrl,
-      },
+      env: agentEnv(serverUrl, run.id),
     });
     status = code === 0 ? 'success' : 'failed';
   }

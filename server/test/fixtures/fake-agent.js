@@ -22,6 +22,8 @@ if (mode === 'call') {
   console.log(JSON.stringify({
     runId: process.env.REWIND_RUN_ID,
     baseUrl: process.env.REWIND_BASE_URL,
+    anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL,
+    serverUrl: process.env.REWIND_SERVER_URL,
     arg,
     reply: reply.choices[0].message.content,
   }));

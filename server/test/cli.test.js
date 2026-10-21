@@ -90,6 +90,8 @@ test('records a successful run: env set, LLM call recorded, status success', asy
   const runId = runIdFrom(stderr);
   assert.equal(report.runId, runId);
   assert.equal(report.baseUrl, `${serverUrl}/r/${runId}/v1`);
+  assert.equal(report.anthropicBaseUrl, `${serverUrl}/r/${runId}`); // the SDK adds /v1/messages
+  assert.equal(report.serverUrl, serverUrl);
   assert.equal(report.arg, text);
   assert.equal(report.reply, `echo: ${text}`);
 
