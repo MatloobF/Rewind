@@ -107,6 +107,7 @@ test('records the call as one finished llm step', async () => {
   assert.equal(rest.length, 0);
   assert.equal(step.idx, 0);
   assert.equal(step.type, 'llm');
+  assert.equal(step.format, 'openai');
   assert.deepEqual(step.request, request);
   assert.equal(step.request_hash, hashRequest(request));
   assert.deepEqual(step.response, completion);

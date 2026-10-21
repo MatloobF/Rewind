@@ -101,7 +101,8 @@ Update this section when scripts are added or renamed.
 ## Environment variables
 
 - `DATABASE_URL`: e.g. `postgres://postgres:rewind@localhost:5432/rewind`
-- `UPSTREAM_URL`: real LLM endpoint the proxy forwards to (default `http://localhost:11434`)
+- `UPSTREAM_URL`: real LLM endpoint the proxy forwards OpenAI-format calls to (default `http://localhost:11434`)
+- `ANTHROPIC_UPSTREAM_URL`: endpoint for Anthropic-format calls (`/r/:runId/v1/messages`). Defaults to `UPSTREAM_URL`, since Ollama serves `/v1/messages` too; set `https://api.anthropic.com` for the real API (optional, paid).
 - `REWIND_SERVER_URL`: Rewind server URL used by the CLI and MCP proxy, and by the server itself to tell forked agents where it is (default `http://localhost:4000`)
 - `REWIND_RUN_ID`: set by the CLI (or the server, for forks) for each run; used by the MCP proxy
 - `REWIND_BASE_URL`: set by the CLI; the agent uses it as its LLM base URL

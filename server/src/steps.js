@@ -5,7 +5,9 @@ import { pool, withTransaction } from './db.js';
 import { hashRequest, withTransportOf } from './hash.js';
 import { notFound, conflict } from './errors.js';
 
-// Starts a step: assigns the next idx and saves the request. Returns
+// Starts a step: assigns the next idx and saves the request. `format` says
+// how an llm step's JSON is shaped ('openai' unless told otherwise; tool steps
+// have none). Returns
 // { idx, mode } plus, depending on the mode:
 //   'live'      nothing: make the real call, then finishStep
 //   'replay'    { response, error } from the parent: no call, no finishStep
@@ -19,7 +21,7 @@ import { notFound, conflict } from './errors.js';
 // If the request at idx <= N doesn't match the parent's, the run diverged:
 // diverged_at_step is set, the override is skipped, and every step from then
 // on is live.
-export async function startStep(runId, { type, request }) {
+export async function startStep(runId, { type, request, format = type === 'llm' ? 'openai' : null }) {
   return withTransaction(async (client) => {
     // Lock the run row. A second startStep for the same run (e.g. LLM proxy
     // and MCP proxy at once) waits here until this transaction commits, so
@@ -40,7 +42,7 @@ export async function startStep(runId, { type, request }) {
       [runId],
     );
     const idx = next[0].idx;
-    const step = { runId, idx, type, request, hash: hashRequest(request) };
+    const step = { runId, idx, type, format, request, hash: hashRequest(request) };
 
     if (!followsParent(run, idx)) {
       await insertStep(client, step);
@@ -92,12 +94,14 @@ function followsParent(run, idx) {
 }
 
 // The parent step can stand in for this one only if it exists, was finished
-// (an unfinished step has nothing to replay), and asked the same thing.
+// (an unfinished step has nothing to replay), and asked the same thing in the
+// same format (an OpenAI answer can't stand in on the Anthropic route).
 function matchesParent(parentStep, step) {
   return (
     parentStep != null &&
     (parentStep.response != null || parentStep.error != null) &&
     parentStep.type === step.type &&
+    parentStep.format === step.format &&
     parentStep.request_hash === step.hash
   );
 }
@@ -113,16 +117,17 @@ async function getStep(client, runId, idx) {
 // Inserts a step. Without `result` it's a live step with response NULL, to be
 // finished later. With it, the row is complete already (a replayed or
 // overridden result). latency_ms stays NULL then, because no call was made.
-async function insertStep(client, { runId, idx, type, request, hash }, result = {}) {
+async function insertStep(client, { runId, idx, type, format, request, hash }, result = {}) {
   const { response = null, error = null, tokens_in = null, tokens_out = null, replayed = false } = result;
   await client.query(
     `INSERT INTO steps
-       (run_id, idx, type, request, request_hash, response, error, tokens_in, tokens_out, replayed)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       (run_id, idx, type, format, request, request_hash, response, error, tokens_in, tokens_out, replayed)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
     [
       runId,
       idx,
       type,
+      format,
       JSON.stringify(request),
       hash,
       // pg parsed the parent's JSONB into an object; stringify it back. NULL stays NULL.
