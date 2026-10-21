@@ -88,8 +88,8 @@ node examples/agent/index.js "sort the files"         # run the sample agent dir
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)
 node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
 node rewind-mcp/index.js                              # Rewind as a stdio MCP server (read-only tools: list_runs, get_run, get_failure_patterns, get_run_loops, list_evals, get_eval); reads REWIND_SERVER_URL and INTEL_URL
-claude mcp add rewind -- node C:/Projects/Rewind/rewind-mcp/index.js   # once: register it with Claude Code (local scope); the tools appear in a new session, check with /mcp
-claude mcp remove rewind -s local                     # unregister it (a committed .mcp.json for Claude Code and Cursor is planned for Phase 10)
+# rewind-mcp is registered by the committed .mcp.json (Claude Code) and .cursor/mcp.json (Cursor); each app asks once before trusting it, check with /mcp
+claude mcp remove rewind -s local                     # once, if you registered it by hand with `claude mcp add` before: a local entry shadows .mcp.json
 cd server && npm link                                 # once: installs the `rewind` command globally
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run, LLM + tool steps (server must be running)
 rewind eval <eval-id>...                              # run saved evals one at a time, print PASS/FAIL and why; exit 0 only if all pass (server must be running; the agent's output shows in the server's terminal)
