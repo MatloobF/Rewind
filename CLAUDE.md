@@ -26,10 +26,18 @@ rewind/
   mcp-proxy/           # Node: MCP proxy that records tool calls
   rewind-mcp/          # Node: Rewind exposed as an MCP server
   web/                 # React (Vite) frontend
+    demo/data/         # API snapshot for the read-only demo build (npm run export:demo)
+    scripts/           # export-demo.js
+    nginx.conf.template  # Docker image: forwards /api and /intel
   intel/               # Python (FastAPI): clustering, loop detection, evals
   examples/agent/      # Sample file-organizer agent used to test Rewind
     sandbox/           # The only folder the agent's file tools may touch
-  docker-compose.yml
+  docs/                # README assets (demo.gif)
+  .github/workflows/   # pages.yml: builds and deploys the demo to GitHub Pages
+  docker-compose.yml   # Postgres; `--profile app` adds server, intel and web (nginx)
+  .mcp.json            # Claude Code: registers rewind-mcp for this repo
+  README.md
+  LICENSE              # MIT
   .env.example         # Committed; copy to .env (never commit .env)
   .gitignore
   CLAUDE.md
@@ -39,6 +47,7 @@ rewind/
     agents/            # Claude Code subagents
   .cursor/
     agents/            # Cursor subagents (same roles as .claude/agents)
+    mcp.json           # Cursor: registers rewind-mcp for this repo
 ```
 
 ## Tech stack
@@ -63,6 +72,7 @@ rewind/
 
 ```bash
 docker compose up -d                                  # start Postgres
+docker compose --profile app up -d --build            # everything in Docker: Postgres, server :4000 (migrates on start), intel :8000, web on :8080 (nginx); stop the host dev servers first; Ollama stays on the host; forks and evals need the host server
 ollama serve                                          # start local LLM (if not already running)
 ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
 cd server && npm install                              # server deps (express, pg)
@@ -71,7 +81,10 @@ cd server && npm test                                 # server tests (hashReques
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000 and /intel to :8000 (failures page at /failures, evals at /evals; "Create eval" on a run page)
-cd web && npm test                                    # web logic tests (run diff alignment, loop descriptions, eval form rows, Anthropic message mapping; no browser, no server)
+cd web && npm test                                    # web logic tests (run diff alignment, loop descriptions, eval form rows, Anthropic message mapping, new-message counting; no browser, no server)
+cd web && npm run export:demo                         # save the API responses the UI reads into web/demo/data (server and intel must be running; skips dev-check runs, see EXCLUDED_NAMES); review the files before committing
+cd web && npm run build:demo                          # read-only demo build in web/dist (base /Rewind/, reads web/demo/data, no POSTs); `npx vite preview --mode demo` to look at it
+# the demo deploys to https://matloobf.github.io/Rewind/ through .github/workflows/pages.yml on every push to main that changes web/
 cd intel && python -m venv .venv                      # once: Python virtualenv for the intel service (gitignored)
 cd intel && .venv/Scripts/python -m pip install -r requirements.txt   # intel deps (Windows path; .venv/bin/python on macOS/Linux)
 cd intel && .venv/Scripts/python -m pytest            # intel tests (health, read-only connection, loop detection, failure extraction, clustering with a fake embedder, eval drafts; needs Postgres)
@@ -106,7 +119,8 @@ Update this section when scripts are added or renamed.
 - `REWIND_SERVER_URL`: Rewind server URL used by the CLI and MCP proxy, and by the server itself to tell forked agents where it is (default `http://localhost:4000`)
 - `REWIND_RUN_ID`: set by the CLI (or the server, for forks) for each run; used by the MCP proxy
 - `REWIND_BASE_URL`: set by the CLI; the agent uses it as its LLM base URL
-- `INTEL_URL`: Python service URL (default `http://localhost:8000`). Read by the Rewind MCP server (`rewind-mcp`). The web UI doesn't read it yet: the Vite dev proxy sends `/intel` to `:8000` directly. Wire that up when deploying (Phase 10).
+- `INTEL_URL`: Python service URL (default `http://localhost:8000`). Read by the Rewind MCP server (`rewind-mcp`), `web/scripts/export-demo.js`, and the web image's nginx, which forwards `/intel` to it (with `REWIND_SERVER_URL` for `/api`). The browser code never reads it: in dev the Vite proxy sends `/intel` to `:8000`.
+- `ANTHROPIC_BASE_URL`: set by the CLI and the server for every agent they start (`<server>/r/<id>`, no `/v1`), so Anthropic SDKs and Claude Code are recorded with no code change.
 - The intel service reads `DATABASE_URL` from the real environment only, not from `.env` (the Node scripts load `../.env` with `--env-file`). If your `.env` points somewhere other than the default, set it in the shell before starting uvicorn.
 
 Never commit real API keys. Keep secrets in `.env` (gitignored) and document every variable in `.env.example`. Never expose secrets to the frontend: in Vite, any `VITE_` variable is bundled into the browser.
@@ -146,6 +160,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 
 - `POST /r/:runId/v1/chat/completions`: LLM proxy, OpenAI format (Phase 2), to `UPSTREAM_URL`
 - `POST /r/:runId/v1/messages`: LLM proxy, Anthropic format (Phase 9), to `ANTHROPIC_UPSTREAM_URL`
+- Any other `/r/:runId/v1/...` path (e.g. `/v1/messages/count_tokens`) is passed through unrecorded (Phase 10): no step, no `idx`, always live, even in a fork; upstream is `ANTHROPIC_UPSTREAM_URL` if the request has an `anthropic-version` header, else `UPSTREAM_URL`
 - Both routes stream when the request has `stream: true` (Phase 9): SSE chunks are forwarded unchanged as they arrive (an upstream that breaks off breaks the agent's stream too), and a replayed or overridden step is sent back as a stream to an agent that asked for one. Errors stay JSON with their status.
 - `POST /api/runs`: create a run (used by the CLI)
 - `PATCH /api/runs/:id`: update status when the agent exits (or when the CLI catches Ctrl+C: `failed`)
@@ -197,7 +212,7 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
 - [x] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
 - [x] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
-- [ ] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.) Claude Code also calls side routes such as `/v1/messages/count_tokens`, which the proxy doesn't serve yet (404): decide whether to pass them through unrecorded.
+- [x] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.) Side routes such as `/v1/messages/count_tokens` are passed through unrecorded. Deploy = static snapshot on GitHub Pages. The live Claude Code recording is documented in the README but not run yet (needs the paid API).
 
 Tick boxes as phases are completed.
 

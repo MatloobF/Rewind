@@ -533,3 +533,85 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Why:** Mapping to one display shape kept `Message.jsx`, the step list and the run diff unchanged. The "new messages at this step" count uses the same mapping, so it stays right when one Anthropic user message becomes two (tool result plus text).
 
 **Rejected:** The API adding a derived, normalized `reply` field to each step. The web UI would still need its own mapping for the request messages, and `finalOutput` would still need its own branch, so it would only save rewind-mcp a few lines, and the API would carry a second copy of each reply.
+
+## Side routes are passed through, unrecorded
+
+**Decision:** Any other path under `/r/:runId/v1/` (Claude Code calls `/v1/messages/count_tokens`, an SDK might call `/v1/models`) is forwarded with its method, body and the usual header subset, and the answer comes back unchanged with its status and content type. No step is recorded and no `idx` is taken, and it always goes live, even during fork replay. The upstream is picked by the `anthropic-version` header: present means `ANTHROPIC_UPSTREAM_URL`, absent means `UPSTREAM_URL`. An unreachable upstream gives 502 `{ error }`.
+
+**Why:** Before this, the proxy answered those paths with its own 404, so recording changed what the agent saw (Rule 2). They aren't recorded because they are bookkeeping, not decisions: Claude Code sends `count_tokens` at times that depend on its own state, so if they took an `idx`, a fork would shift every later step and diverge at once. The header decides the upstream, not the path, because `/v1/models` exists in both APIs.
+
+**Rejected:** Recording them as LLM steps (breaks replay, as above), a list of allowed paths (every new side route would be a 404 until someone added it), and choosing the upstream by path.
+
+## `rewind run` also sets `ANTHROPIC_BASE_URL`, without `/v1`
+
+**Decision:** One function, `agentEnv(serverUrl, runId)` in `server/src/agentEnv.js`, builds the environment for every agent Rewind starts (`rewind run`, forks, evals): `REWIND_RUN_ID`, `REWIND_BASE_URL` (`<server>/r/<id>/v1`), `ANTHROPIC_BASE_URL` (`<server>/r/<id>`) and `REWIND_SERVER_URL`.
+
+**Why:** Anthropic SDKs and Claude Code read `ANTHROPIC_BASE_URL` on their own and add `/v1/messages` themselves, while OpenAI SDKs expect the `/v1` in the base URL. Setting both means either kind of agent is recorded with no code change (Rule 1). One function means the CLI and the server launcher can't drift apart; before this the CLI didn't pass `REWIND_SERVER_URL` at all.
+
+**Rejected:** Asking users to set `ANTHROPIC_BASE_URL` themselves from `REWIND_BASE_URL` (easy to get the `/v1` wrong, and forks would need it too).
+
+## "New messages" counts the prefix shared with any earlier LLM step
+
+**Decision:** The timeline shows an LLM step's request messages minus the longest prefix it shares (comparing each message as JSON) with *any* earlier LLM step in the run.
+
+**Why:** The old count assumed each request extends the one before it and just subtracted lengths. Claude Code interleaves unrelated conversations in one run (small Haiku calls for titles and checks between the main calls), so a main call after a side call showed "0 of 1 new" and hid what was really sent. Matching against every earlier step finds the conversation a request continues.
+
+**Rejected:** Comparing only with the step just before (the bug), and grouping steps into conversations by system prompt (more code, and it guesses).
+
+## The MCP configs are committed, with each app's own path rule
+
+**Decision:** `.mcp.json` (Claude Code) runs `node rewind-mcp/index.js` with a relative path; `.cursor/mcp.json` uses `${workspaceFolder}/rewind-mcp/index.js`. Both just start `rewind-mcp` with its defaults.
+
+**Why:** Committed configs mean cloning the repo is enough: each app asks once whether to trust the server. Claude Code starts project servers in the project root, so a relative path works there. Cursor's docs don't say which directory it starts servers in, but they document `${workspaceFolder}`, so that one uses it. No absolute paths, so the files work on any machine.
+
+**Gotcha:** a server added by hand with `claude mcp add` (local scope) wins over the project's `.mcp.json` with the same name, so an old local `rewind` entry has to be removed once.
+
+## Compose starts only Postgres unless you ask for the app
+
+**Decision:** `server`, `intel` and `web` are in a compose profile called `app`. `docker compose up -d` starts Postgres alone, as before; `docker compose --profile app up -d --build` starts everything. Postgres has a `pg_isready` healthcheck and the server waits for it (`depends_on: condition: service_healthy`). The server's container runs `node src/migrate.js && exec node src/index.js`, so migrations apply on every start. It reaches Ollama on the host as `host.docker.internal`, with an `extra_hosts: host-gateway` line for Linux.
+
+**Why:** Day-to-day development runs the services on the host with file watching, so the usual command must not start containers that take the same ports. Migrations on start are safe because the runner is idempotent and takes an advisory lock. Ollama stays on the host (see "Ollama stays on the host").
+
+**Rejected:** A second compose file (two files to keep in sync), and a separate migration container (one more service for a step that takes a second).
+
+## nginx forwards `/api` and `/intel` in the web image, so the web code doesn't change
+
+**Decision:** The web image builds the app and serves it with nginx. `nginx.conf.template` forwards `/api/` to `REWIND_SERVER_URL` and `/intel/` to `INTEL_URL` (removing the `/intel` prefix, like the Vite dev proxy does), and sends every other path to `index.html` for client-side routing. The official image fills in the URLs from the environment when it starts.
+
+**Why:** The browser code already calls same-origin `/api` and `/intel` paths in development. Doing the same in production means no CORS, no build-time URLs, and one image that works with any server address. This is where the `INTEL_URL` note in CLAUDE.md ("wire that up when deploying") ended up: in nginx, not in React.
+
+**Rejected:** A `VITE_INTEL_URL` baked into the bundle (one build per environment), and CORS on the server and intel service.
+
+## The intel image uses CPU-only PyTorch and has the model built in
+
+**Decision:** The intel Dockerfile installs `torch` from PyTorch's CPU wheel index before `requirements.txt`, downloads `all-MiniLM-L6-v2` while building, and sets `HF_HUB_OFFLINE=1`. The image is about 2.2 GB.
+
+**Why:** The default `torch` wheel on Linux includes CUDA libraries, several GB that a CPU-only service never uses. Downloading the model while building means the container starts with no network access and doesn't download 90 MB on every fresh start; offline mode makes a missing model fail loudly instead of quietly trying the network.
+
+**Rejected:** The default torch (much bigger image), and downloading the model at startup into a volume (slower first start, needs network).
+
+## Forks and evals need the server running on the host
+
+**Decision:** In Docker the server records runs and serves the API, but forks and evals fail there. That's documented, not fixed.
+
+**Why:** A fork or eval starts the agent again with the run's recorded `command` and `cwd` (e.g. `C:\Projects\Rewind`). That directory, the agent's code and its `node_modules` exist on the host, not in the server's container. Fixing it would mean mounting the agent's folder at the same path inside the container, which only works on one machine with one layout.
+
+**Rejected:** Mounting the repo into the container (path differences between Windows and Linux, and it only covers agents inside this repo), and a separate "runner" service on the host (much more code for a demo).
+
+## The public deploy is a static snapshot on GitHub Pages
+
+**Decision:** `web/scripts/export-demo.js` saves every GET the UI makes (runs, steps, trees, loops, failure clusters, evals) as JSON files in `web/demo/data`, reading through the server and intel APIs. `npm run build:demo` builds the app in Vite's `demo` mode: base `/Rewind/`, the JSON served from `demo/` as static files, `getJson` reading `<base>data<path>.json`, every POST refused, Fork / Create eval / Run eval hidden, and a banner saying it's read-only. `404.html` is a copy of `index.html`, so links deep into the app work on Pages. A GitHub Actions workflow runs the web tests, builds and deploys on every push that changes `web/`.
+
+**Why:** Free, no cold starts, nothing to keep running, and nothing to attack: there is no proxy, so nobody can spend LLM time or make the server start processes. The snapshot is reviewed as files in a commit before it's published. The cost is that the demo only shows what was recorded, which is what a visitor needs to see.
+
+**Rejected:** Render's free tier plus Neon Postgres (cold starts of 30 s or more, the intel service with torch doesn't fit in 512 MB, and the API would need a read-only mode and protection from abuse).
+
+**Choices in the snapshot:** dev checks (`phase2-e2e`, the Phase 10 streaming and Docker checks) are left out, along with forks of left-out runs. `mcp-proxy check (step 4)` stays, because its tool errors are part of the failure clusters, which intel computes over all runs; dropping it would leave cluster counts that don't add up. The script warns if a left-out run's id appears anywhere in the saved files.
+
+## The Claude Code recipe is documented but not run
+
+**Decision:** The README explains how to record Claude Code (real Anthropic API, `--bare`, file tools through the MCP proxy, built-in tools off) and says plainly that this exact command hasn't been run end to end.
+
+**Why:** Claude Code's prompt is too large for `rewind-qwen` on a CPU, so the recording needs the paid API, which is billed separately from a Claude subscription. Rule 11 keeps paid APIs optional. Each piece the recipe depends on is tested on its own: the Anthropic route with streaming, `ANTHROPIC_BASE_URL`, side-route passthrough and the MCP proxy.
+
+**Rejected:** Claiming it works without running it, and leaving it out of the README (it's the headline use case).
