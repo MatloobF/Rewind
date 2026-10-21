@@ -1,0 +1,54 @@
+# Builds the read-only demo (web/, `npm run build:demo`) from the committed
+# API snapshot in web/demo/data and publishes it to GitHub Pages at
+# https://matloobf.github.io/Rewind/. No database or LLM is involved.
+# Pages must be enabled once: Settings -> Pages -> Source: GitHub Actions.
+name: Deploy demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'web/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch: # run by hand from the Actions tab
+
+# Only what deploying to Pages needs.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push doesn't cancel one already deploying.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build:demo
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
