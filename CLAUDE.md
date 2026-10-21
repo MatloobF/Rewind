@@ -8,7 +8,7 @@ This file gives AI coding assistants (Cursor, Claude Code, etc.) context for wor
 
 Core pieces:
 
-1. **Recorder (Node):** an LLM proxy (drop-in base URL for OpenAI-compatible SDKs; Anthropic format in Phase 9) and an MCP proxy that wraps any real MCP server. Both record traffic to Postgres.
+1. **Recorder (Node):** an LLM proxy (drop-in base URL for OpenAI-compatible and Anthropic SDKs, streaming or not) and an MCP proxy that wraps any real MCP server. Both record traffic to Postgres.
 2. **Store (PostgreSQL):** runs and steps, with fork relationships forming a tree.
 3. **Replay engine (Node):** replays recorded steps deterministically up to a fork point, applies an override, then continues live.
 4. **Intelligence layer (Python):** failure clustering, loop/anomaly detection, auto-generated regression evals.
@@ -67,11 +67,11 @@ ollama serve                                          # start local LLM (if not 
 ollama create rewind-qwen -f examples/agent/Modelfile # once: qwen2.5:7b with a 16k context window
 cd server && npm install                              # server deps (express, pg)
 cd server && npm run migrate                          # apply new server/migrations/*.sql (safe to re-run, and to run from several processes at once)
-cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy, eval API, assertion checker, eval runs and `rewind eval`; needs Postgres, not Ollama)
+cd server && npm test                                 # server tests (hashRequest, run/step API, LLM proxy incl. streaming and the Anthropic route, SSE parsing, eval API, assertion checker, eval runs and `rewind eval`; fake upstreams, needs Postgres, not Ollama)
 cd server && npm run dev                              # proxy + API on :4000 (restarts on file changes)
 cd web && npm install                                 # web deps (react, vite, tailwind, react-query)
 cd web && npm run dev                                 # frontend on :5173, proxies /api to :4000 and /intel to :8000 (failures page at /failures, evals at /evals; "Create eval" on a run page)
-cd web && npm test                                    # web logic tests (run diff alignment, loop descriptions, eval form rows; no browser, no server)
+cd web && npm test                                    # web logic tests (run diff alignment, loop descriptions, eval form rows, Anthropic message mapping; no browser, no server)
 cd intel && python -m venv .venv                      # once: Python virtualenv for the intel service (gitignored)
 cd intel && .venv/Scripts/python -m pip install -r requirements.txt   # intel deps (Windows path; .venv/bin/python on macOS/Linux)
 cd intel && .venv/Scripts/python -m pytest            # intel tests (health, read-only connection, loop detection, failure extraction, clustering with a fake embedder, eval drafts; needs Postgres)
@@ -80,7 +80,7 @@ cd examples/agent && npm install                      # sample agent deps (opena
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
 cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open, fork replay/override and fail-closed; no Postgres)
 cd rewind-mcp && npm install                          # Rewind MCP server deps (MCP SDK, zod for tool input schemas)
-cd rewind-mcp && npm test                             # Rewind MCP server tests (run, intel and eval tools, step summaries and clipping, API- and intel-down errors, stdio; fake HTTP services, no Postgres)
+cd rewind-mcp && npm test                             # Rewind MCP server tests (run, intel and eval tools, step summaries for both LLM formats and clipping, API- and intel-down errors, stdio; fake HTTP services, no Postgres)
 cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files
 cd examples/agent && npm run seed:failures            # record 10 scripted failing runs via the API for the intel service (server must be running; --force to add again)
 cd examples/agent && npm test                         # sample agent tests (safePath, tools, seed, loop, MCP server + client)
@@ -123,6 +123,8 @@ Core tables below. Keep it this small unless there is a strong reason to split.
   - `created_at`
 - **`steps`**
   - `id`, `run_id`, `idx`, `type` (`llm | tool`), `request` (JSONB), `response` (JSONB), `request_hash`, `latency_ms`, `tokens_in`, `tokens_out`, `error`
+  - `format` (Phase 9): `openai | anthropic` for `llm` steps, set from the proxy route; NULL for `tool` steps (a CHECK enforces both). Readers branch on it to read `request`/`response`; replay only uses a parent step of the same format.
+  - `response` is always stored in the **non-streaming** shape (a `chat.completion` or a `message`), even when the call streamed: the proxy rebuilds it from the SSE events. Anthropic `tokens_in` = `input_tokens` + both cache token counts.
   - `replayed` (BOOLEAN, default false): true when the response was served from the parent run instead of a live call
   - `response` is NULL while a live call is in progress (step started, not finished). A step left NULL means the agent died mid-call.
   - `UNIQUE (run_id, idx)`
@@ -142,7 +144,9 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 
 ## API surface (grows by phase)
 
-- `POST /r/:runId/v1/chat/completions`: LLM proxy (Phase 2)
+- `POST /r/:runId/v1/chat/completions`: LLM proxy, OpenAI format (Phase 2), to `UPSTREAM_URL`
+- `POST /r/:runId/v1/messages`: LLM proxy, Anthropic format (Phase 9), to `ANTHROPIC_UPSTREAM_URL`
+- Both routes stream when the request has `stream: true` (Phase 9): SSE chunks are forwarded unchanged as they arrive (an upstream that breaks off breaks the agent's stream too), and a replayed or overridden step is sent back as a stream to an agent that asked for one. Errors stay JSON with their status.
 - `POST /api/runs`: create a run (used by the CLI)
 - `PATCH /api/runs/:id`: update status when the agent exits (or when the CLI catches Ctrl+C: `failed`)
 - `POST /api/runs/:id/steps`: **start** a step. Body `{ type, request }`. Server assigns `idx`, saves the request, returns `{ idx, mode }`, plus the parent's `{ response, error }` for `replay`
@@ -153,7 +157,7 @@ Schema changes go in numbered SQL migration files (e.g. `server/migrations/001_i
 1. The proxy starts the step. The server locks the run, assigns `idx`, inserts the row (`response` NULL) and returns a `mode`:
    - `live`: make the real call, then PATCH the result. (Phase 2–4: always `live`.)
    - `replay` (Phase 5): the row is already complete with the parent's response and `replayed = true`. Return `response` to the agent, make no call, don't PATCH.
-   - `override` (Phase 5): apply `fork_override` as Rule 6 says. `{ kind: "response", response }` returns `{ response }` (row already finished, no call, no PATCH); `{ kind: "request", request }` returns `{ request }` to send live, then PATCH.
+   - `override` (Phase 5): apply `fork_override` as Rule 6 says. `{ kind: "response", response }` returns `{ response }` (row already finished, no call, no PATCH); `{ kind: "request", request }` returns `{ request }` to send live, then PATCH. The sent request keeps the agent's own `stream`/`stream_options`, not the edit's.
 2. All replay decisions are made in the server, in one place. The MCP proxy uses these two HTTP routes. The LLM proxy lives in the server, so it calls the same functions directly.
 - `GET /api/runs`, `GET /api/runs/:id`, `GET /api/runs/:id/tree` (Phase 3)
 - `POST /api/runs/:id/fork`: fork a finished run. Body `{ fork_step, fork_override?, name?, setup? }`; `setup` is an optional argv run (no shell, in the run's `cwd`) before the agent, e.g. `["node", "examples/agent/seed.js"]`. Returns 201 with the new run at once; the server launches the agent in the background and sets the status when it exits (Phase 5). Replayed tool steps don't run, so `setup` resets the world to the run's start, not to its state at the fork step; a fork after a file-changing tool call starts from the wrong state.
@@ -192,8 +196,8 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
 - [x] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
 - [x] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
-- [ ] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
-- [ ] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.)
+- [x] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
+- [ ] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.) Claude Code also calls side routes such as `/v1/messages/count_tokens`, which the proxy doesn't serve yet (404): decide whether to pass them through unrecorded.
 
 Tick boxes as phases are completed.
 

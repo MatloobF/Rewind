@@ -483,3 +483,53 @@ Short record of design choices: what we picked, why, and what we rejected.
 **Rejected:** A health check at startup (each call stands on its own, and a service can start or stop after the MCP server does), and one long timeout for every tool (a hung server would stall the model for a minute on every call).
 
 **Gotcha seen:** the first "API down" test pointed at port 1 and got "bad port" instead of `ECONNREFUSED`: `fetch` refuses ports on the Fetch spec's blocked list without trying them. The tests use a port that was just closed instead.
+
+## Streamed answers are stored in the non-streaming shape
+
+**Decision:** With `stream: true`, the proxy forwards each SSE chunk to the agent as it arrives, with the bytes unchanged. A copy of each chunk goes through a parser (`server/src/sse.js`) that rebuilds the response a non-streaming call would have returned: a `chat.completion` for the OpenAI format, a `message` for the Anthropic format. That rebuilt response is what `finishStep` stores. For replay, the stored response is turned back into a stream (`chatChunks`, `messageEvents`) when the fork's agent asked for one. Whether the agent gets JSON or a stream depends on its own `stream` flag, not on how the parent was recorded. The replay stream sends each message as one big delta; a streaming SDK reads that the same as many small ones.
+
+**Why:** `stream` and `stream_options` are left out of `request_hash`, so a streaming and a non-streaming request match each other, and a run recorded one way can be forked by an agent that asks the other way. Storing one shape means replay only ever converts one way (stored → stream), and every reader (web, intel, assertions, rewind-mcp) works on streamed steps with no changes. Rebuilding never touches what the agent receives, so Rule 2 holds. The OpenAI round trip and the Anthropic round trip are each tested in one test: stored → stream → parser gives back the same response.
+
+**Rejected:** Storing the raw SSE text. Replay would be byte-exact, but every reader would need an SSE parser, and a non-streaming fork of a streamed run would need conversion the other way too.
+
+**Consequence:** the proxy never adds `stream_options.include_usage` (that would change the request), so an OpenAI-format stream from an agent that didn't ask for usage is recorded with `tokens_in`/`tokens_out` NULL.
+
+## A broken stream is passed on broken, and the parser never throws
+
+**Decision:** If upstream breaks off mid-stream, the proxy destroys the agent's connection too instead of ending it cleanly, and records what arrived with `error: "upstream stream failed: …"`. If the agent hangs up, the proxy stops reading, which closes the upstream connection, and records `"agent disconnected mid-stream"`. The assemblers never throw. They note the first problem (a non-JSON event, an `error` event, invalid tool-input JSON, a stream that ended without `[DONE]` / `message_stop`) and keep going, so forwarding never stops because of a recording problem.
+
+**Why:** A cleanly ended response would hide the failure from the agent, which is the agent seeing something different from what it would see without the proxy (Rule 2). Keeping the partial response shows how far the call got.
+
+**Test design:** to prove chunks are forwarded as they arrive, the fake upstream sends chunk 1 and then waits until the test has *read* chunk 1 from the proxy before sending the rest. A buffering proxy deadlocks there, so the test fails without depending on timing.
+
+## LLM steps record their API format in a `format` column
+
+**Decision:** `steps.format` is `'openai'` or `'anthropic'` for LLM steps and NULL for tool steps, enforced by a CHECK (`(type = 'llm') = (format IS NOT NULL)`). Migration 003 filled existing LLM rows with `'openai'`. The proxy sets it from the route (`/v1/chat/completions` or `/v1/messages`), and replay requires the parent step to have the same format as well as the same hash.
+
+**Why:** Readers need to know how to read a step's JSON, and the shape alone fails on the rows that matter most: error bodies and NULL responses from a crashed call. The replay check closes a real hole: an identical body sent to the other route has the same hash, and without the check the fork would get an OpenAI answer on the Anthropic route.
+
+**Rejected:** Guessing from the shape (`choices` vs `content[]`). Also a new step type like `llm_anthropic` (it breaks every `type === 'llm'` check, and `type` means what kind of step it is, not how it is encoded), and a marker inside `request` (it changes the stored request and its hash).
+
+## The Anthropic route defaults to the same upstream as the OpenAI route
+
+**Decision:** `ANTHROPIC_UPSTREAM_URL` defaults to `UPSTREAM_URL`, because Ollama (0.40.4 here) also serves `/v1/messages`. Setting it to `https://api.anthropic.com` sends only the Anthropic route to the real API. `x-api-key`, `anthropic-version` and `anthropic-beta` are forwarded but never recorded, since only bodies are stored. The tests pass both URLs explicitly, so a key in `.env` can never send test traffic to the paid API.
+
+**Why:** Rule 11: the default setup stays free, and both routes can be tried locally against `rewind-qwen`. A separate variable lets the OpenAI route stay on Ollama while the Anthropic route goes to the real API, which the Phase 10 Claude Code demo needs.
+
+**Rejected:** One `UPSTREAM_URL` for both (the two routes couldn't go to different servers) and always defaulting to `api.anthropic.com` (the dev setup would need a paid key).
+
+**Detail:** `tokens_in` for an Anthropic step is `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`, so it means "prompt size" like OpenAI's `prompt_tokens`. With prompt caching, `input_tokens` alone can be a handful of tokens for a huge prompt.
+
+## A request override is sent with the agent's own stream fields
+
+**Decision:** At a fork step with a `request` override, the request sent (and stored) takes `stream` and `stream_options` from the agent's actual request, not from the edit (`withTransportOf()` in `hash.js`, used by `applyOverride`).
+
+**Why:** The edit usually comes from the parent's recorded request. If the parent didn't stream but the fork's agent does (or the reverse), sending the edit as it is would answer in a format the agent's SDK can't read. Transport fields describe how the agent wants the answer delivered, not what it asks, and they're already outside the hash, so this doesn't change replay matching. The stored row is still the request actually sent.
+
+## Each reader branches on `format` in one small helper
+
+**Decision:** Each consumer reads both formats itself. The web UI maps Anthropic messages to the OpenAI-style chat messages it already renders (`web/src/llmFormat.js`): the `system` field becomes the first message, `tool_use` blocks become `tool_calls`, each `tool_result` becomes a `role: 'tool'` message, `thinking` is shown dimmed, and images become a `[image]` placeholder. The server's `finalOutput` joins an Anthropic reply's text blocks. rewind-mcp's `summarizeStep` fills the same `reply` / `tool_calls` / `finish_reason` fields from `content` blocks and `stop_reason`, and adds `format`. The intel service didn't change: loops, failures and eval drafts only use `request_hash`, tool steps and error text.
+
+**Why:** Mapping to one display shape kept `Message.jsx`, the step list and the run diff unchanged. The "new messages at this step" count uses the same mapping, so it stays right when one Anthropic user message becomes two (tool result plus text).
+
+**Rejected:** The API adding a derived, normalized `reply` field to each step. The web UI would still need its own mapping for the request messages, and `finalOutput` would still need its own branch, so it would only save rewind-mcp a few lines, and the API would carry a second copy of each reply.
