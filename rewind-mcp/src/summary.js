@@ -113,6 +113,51 @@ export function summarizePattern(pattern) {
   };
 }
 
+// The fields of an eval shown in list_evals and get_eval. Left out: cwd,
+// and setup (only matters for running an eval, and these tools only read).
+const EVAL_FIELDS = ['id', 'input_task', 'source_run_id', 'command', 'assertions', 'created_at'];
+
+// An eval from GET /api/evals, with its pass counts and latest result.
+export function summarizeEvalListItem(evalRow) {
+  const latest = evalRow.latest_result;
+  return {
+    ...pick(evalRow, EVAL_FIELDS),
+    ...pick(evalRow, ['result_count', 'checked_count', 'passed_count']),
+    latest_result: latest ? summarizeResult(latest) : null,
+  };
+}
+
+// An eval from GET /api/evals/:id with its newest `limit` results.
+export function summarizeEval(evalRow, limit) {
+  return {
+    ...pick(evalRow, EVAL_FIELDS),
+    total_results: evalRow.results.length,
+    results: evalRow.results.slice(0, limit).map(summarizeResult),
+  };
+}
+
+// One eval result. passed is null while its run is still going.
+// (run_status is only there in get_eval's results.)
+function summarizeResult(result) {
+  return {
+    run_id: result.run_id,
+    ...(result.run_status !== undefined && { run_status: result.run_status }),
+    passed: result.passed,
+    failures: summarizeFailures(result.failures),
+    created_at: result.created_at,
+  };
+}
+
+// Each failure stores its whole assertion, which the eval's assertions list
+// already holds: keep its index into that list and its type.
+function summarizeFailures(failures) {
+  return (failures ?? []).map((failure) => ({
+    index: failure.index,
+    type: failure.assertion?.type ?? null,
+    message: clip(failure.message),
+  }));
+}
+
 // Chat message content is a string, or an array of parts like { type: 'text', text }.
 function messageText(content) {
   if (typeof content === 'string') return content || null;

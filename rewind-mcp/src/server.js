@@ -6,7 +6,9 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getJson } from './api.js';
-import { RUN_FIELDS, pick, summarizeRun, summarizePattern } from './summary.js';
+import {
+  RUN_FIELDS, pick, summarizeRun, summarizePattern, summarizeEvalListItem, summarizeEval,
+} from './summary.js';
 
 const INTEL = { service: 'Rewind intel service' };
 
@@ -80,6 +82,34 @@ export function createRewindServer({ serverUrl, intelUrl }) {
       run_id: z.guid().describe('The run id, e.g. from list_runs'),
     },
   }, ({ run_id }) => toolResult(() => getJson(intelUrl, `/runs/${run_id}/loops`, INTEL)));
+
+  server.registerTool('list_evals', {
+    title: 'List evals',
+    description:
+      'List saved evals (regression tests made from runs), newest first. Each has its structured assertions, ' +
+      'how many times it was run and passed, and its latest result. A result\'s failures give the index of the ' +
+      'failed assertion in assertions, its type and why it failed. passed is null while that run is still going.',
+    inputSchema: {
+      limit: z.number().int().min(1).max(100).default(20)
+        .describe('Maximum number of evals to return (1-100, default 20)'),
+    },
+  }, ({ limit }) => toolResult(async () => {
+    const evals = await getJson(serverUrl, '/api/evals');
+    return evals.slice(0, limit).map(summarizeEvalListItem);
+  }));
+
+  server.registerTool('get_eval', {
+    title: 'Get eval',
+    description:
+      'Get one eval with its assertions and its results, newest first. Each result has the run_id of the eval run ' +
+      '(inspect it with get_run), run_status, passed (null while the run is still going) and which assertions failed.',
+    inputSchema: {
+      eval_id: z.guid().describe('The eval id, e.g. from list_evals'),
+      limit: z.number().int().min(1).max(50).default(10)
+        .describe('Maximum number of results to return (1-50, default 10)'),
+    },
+  }, ({ eval_id, limit }) => toolResult(async () =>
+    summarizeEval(await getJson(serverUrl, `/api/evals/${eval_id}`), limit)));
 
   return server;
 }

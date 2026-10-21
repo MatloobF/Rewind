@@ -80,14 +80,14 @@ cd examples/agent && npm install                      # sample agent deps (opena
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
 cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open, fork replay/override and fail-closed; no Postgres)
 cd rewind-mcp && npm install                          # Rewind MCP server deps (MCP SDK, zod for tool input schemas)
-cd rewind-mcp && npm test                             # Rewind MCP server tests (run tools, intel tools, step summaries and clipping, API- and intel-down errors, stdio; fake HTTP services, no Postgres)
+cd rewind-mcp && npm test                             # Rewind MCP server tests (run, intel and eval tools, step summaries and clipping, API- and intel-down errors, stdio; fake HTTP services, no Postgres)
 cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files
 cd examples/agent && npm run seed:failures            # record 10 scripted failing runs via the API for the intel service (server must be running; --force to add again)
 cd examples/agent && npm test                         # sample agent tests (safePath, tools, seed, loop, MCP server + client)
 node examples/agent/index.js "sort the files"         # run the sample agent directly (~3 min on CPU)
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)
 node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
-node rewind-mcp/index.js                              # Rewind as a stdio MCP server (tools: list_runs, get_run, get_failure_patterns, get_run_loops); reads REWIND_SERVER_URL and INTEL_URL
+node rewind-mcp/index.js                              # Rewind as a stdio MCP server (read-only tools: list_runs, get_run, get_failure_patterns, get_run_loops, list_evals, get_eval); reads REWIND_SERVER_URL and INTEL_URL
 cd server && npm link                                 # once: installs the `rewind` command globally
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run, LLM + tool steps (server must be running)
 rewind eval <eval-id>...                              # run saved evals one at a time, print PASS/FAIL and why; exit 0 only if all pass (server must be running; the agent's output shows in the server's terminal)

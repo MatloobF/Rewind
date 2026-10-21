@@ -276,6 +276,116 @@ test('with the intel service down, its tools say so and the run tools still work
   assert.equal(parse(runs).length, RUNS.length);
 });
 
+const EVAL_ID = '99999999-8888-7777-6666-555555555555';
+const ASSERTIONS = [{ type: 'run_status', status: 'success' }, { type: 'max_steps', max: 12 }];
+const FAILURE = { index: 1, assertion: ASSERTIONS[1], message: 'took 14 steps, max 12' };
+
+// An eval as the API stores it; list and get add their own extra fields.
+function evalRow(id, extra = {}) {
+  return {
+    id, source_run_id: RUN_ID, input_task: 'sort the files', command: ['node', 'agent.js'],
+    cwd: 'C:/somewhere', setup: ['node', 'seed.js'], assertions: ASSERTIONS,
+    created_at: '2026-10-18T00:00:00.000Z', ...extra,
+  };
+}
+
+function evalResult(i, passed, extra = {}) {
+  return {
+    id: `res${i}`, eval_id: EVAL_ID, run_id: `run${i}`, passed,
+    failures: passed === false ? [FAILURE] : [], created_at: '2026-10-18T00:00:00.000Z', ...extra,
+  };
+}
+
+test('list_evals returns evals with counts and a trimmed latest result', async () => {
+  const api = await fakeApi({
+    '/api/evals': {
+      status: 200,
+      body: [
+        evalRow(EVAL_ID, {
+          result_count: 3, checked_count: 3, passed_count: 2,
+          latest_result: { id: 'res2', run_id: 'run2', passed: false, failures: [FAILURE], created_at: '2026-10-18T00:00:00.000Z' },
+        }),
+        evalRow('never-run', { result_count: 0, checked_count: 0, passed_count: 0, latest_result: null }),
+      ],
+    },
+  });
+  const client = await clientFor(api.url);
+  const result = await client.callTool({ name: 'list_evals', arguments: {} });
+  assert.equal(result.isError, undefined);
+  const [first, neverRun] = parse(result);
+  assert.deepEqual(first, {
+    id: EVAL_ID, input_task: 'sort the files', source_run_id: RUN_ID, command: ['node', 'agent.js'],
+    assertions: ASSERTIONS, created_at: '2026-10-18T00:00:00.000Z',
+    result_count: 3, checked_count: 3, passed_count: 2,
+    latest_result: {
+      run_id: 'run2', passed: false, created_at: '2026-10-18T00:00:00.000Z',
+      failures: [{ index: 1, type: 'max_steps', message: 'took 14 steps, max 12' }],
+    },
+  });
+  assert.equal(neverRun.latest_result, null);
+  assert.deepEqual(api.calls, ['/api/evals']);
+});
+
+test('list_evals returns at most limit evals', async () => {
+  const many = Array.from({ length: 25 }, (_, i) => evalRow(`e${i}`, { latest_result: null }));
+  const api = await fakeApi({ '/api/evals': { status: 200, body: many } });
+  const client = await clientFor(api.url);
+  assert.equal(parse(await client.callTool({ name: 'list_evals', arguments: {} })).length, 20);
+  const two = parse(await client.callTool({ name: 'list_evals', arguments: { limit: 2 } }));
+  assert.deepEqual(two.map((e) => e.id), ['e0', 'e1']);
+});
+
+test('get_eval returns the newest results, up to limit, and how many there are', async () => {
+  const results = [
+    evalResult(3, null, { run_status: 'running' }),
+    evalResult(2, false, { run_status: 'failed' }),
+    evalResult(1, true, { run_status: 'success' }),
+  ];
+  const api = await fakeApi({ [`/api/evals/${EVAL_ID}`]: { status: 200, body: evalRow(EVAL_ID, { results }) } });
+  const client = await clientFor(api.url);
+  const result = await client.callTool({ name: 'get_eval', arguments: { eval_id: EVAL_ID, limit: 2 } });
+  assert.equal(result.isError, undefined);
+  const summary = parse(result);
+  assert.equal(summary.id, EVAL_ID);
+  assert.deepEqual(summary.assertions, ASSERTIONS);
+  assert.equal('cwd' in summary, false);
+  assert.equal('setup' in summary, false);
+  assert.equal(summary.total_results, 3);
+  assert.deepEqual(summary.results, [
+    { run_id: 'run3', run_status: 'running', passed: null, failures: [], created_at: '2026-10-18T00:00:00.000Z' },
+    {
+      run_id: 'run2', run_status: 'failed', passed: false, created_at: '2026-10-18T00:00:00.000Z',
+      failures: [{ index: 1, type: 'max_steps', message: 'took 14 steps, max 12' }],
+    },
+  ]);
+});
+
+test('get_eval passes on the API 404 for an unknown eval', async () => {
+  const api = await fakeApi({
+    [`/api/evals/${EVAL_ID}`]: { status: 404, body: { error: `eval ${EVAL_ID} not found` } },
+  });
+  const client = await clientFor(api.url);
+  const result = await client.callTool({ name: 'get_eval', arguments: { eval_id: EVAL_ID } });
+  assert.equal(result.isError, true);
+  assert.equal(result.content[0].text, `GET /api/evals/${EVAL_ID} failed with 404: eval ${EVAL_ID} not found`);
+});
+
+test('get_eval rejects an eval_id that is not a UUID without calling the API', async () => {
+  const api = await fakeApi({});
+  const client = await clientFor(api.url);
+  const result = await client.callTool({ name: 'get_eval', arguments: { eval_id: 'abc' } });
+  assert.equal(result.isError, true);
+  assert.deepEqual(api.calls, []);
+});
+
+test('tools/list shows all six read-only tools', async () => {
+  const client = await clientFor('http://127.0.0.1:1');
+  const { tools } = await client.listTools();
+  assert.deepEqual(tools.map((t) => t.name).sort(), [
+    'get_eval', 'get_failure_patterns', 'get_run', 'get_run_loops', 'list_evals', 'list_runs',
+  ]);
+});
+
 // Over real stdio, any stray console.log would corrupt the protocol and
 // this would fail (Rule 4).
 test('index.js serves list_runs over stdio, reading REWIND_SERVER_URL', async () => {
