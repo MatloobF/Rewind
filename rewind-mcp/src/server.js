@@ -1,19 +1,12 @@
 // Rewind as an MCP server. Each tool is a read-only question about the
 // recorded data, answered by calling the Rewind API over HTTP.
 //
-// Tool results go into the calling LLM's context, so they are kept small:
-// only the fields that help answer a question, as one JSON text block.
+// Tool results go into the calling LLM's context, so they are kept small
+// (see summary.js), as one JSON text block.
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getJson } from './api.js';
-
-// The fields of a run that list_runs returns. Left out: cwd (not useful to
-// an LLM) and fork_override (can hold a whole edited LLM response).
-const RUN_FIELDS = [
-  'id', 'name', 'status', 'command', 'created_at',
-  'parent_run_id', 'fork_step', 'diverged_at_step',
-  'step_count', 'tokens_in', 'tokens_out', 'latency_ms',
-];
+import { RUN_FIELDS, pick, summarizeRun } from './summary.js';
 
 export function createRewindServer({ serverUrl }) {
   const server = new McpServer({ name: 'rewind', version: '0.1.0' });
@@ -39,6 +32,20 @@ export function createRewindServer({ serverUrl }) {
       .map((run) => pick(run, RUN_FIELDS));
   }));
 
+  server.registerTool('get_run', {
+    title: 'Get run',
+    description:
+      'Get one run with a compact summary of every step, in order. LLM steps show the reply text and tool calls ' +
+      '(not the whole conversation); tool steps show the tool, its arguments and its result. Long text is clipped ' +
+      'and marked "(+N chars)". replayed: true means a fork copied the step from its parent instead of making the call.',
+    inputSchema: {
+      // z.guid() accepts any 8-4-4-4-12 hex id, like the server's isUuid.
+      // (z.uuid() also checks the version digit, which the server doesn't.)
+      run_id: z.guid().describe('The run id, e.g. from list_runs'),
+    },
+  }, ({ run_id }) => toolResult(async () =>
+    summarizeRun(await getJson(serverUrl, `/api/runs/${run_id}`))));
+
   return server;
 }
 
@@ -52,8 +59,4 @@ async function toolResult(work) {
   } catch (err) {
     return { content: [{ type: 'text', text: err.message }], isError: true };
   }
-}
-
-function pick(object, keys) {
-  return Object.fromEntries(keys.map((key) => [key, object[key]]));
 }

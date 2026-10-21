@@ -130,6 +130,49 @@ test('list_runs passes on the API error text', async () => {
   assert.equal(result.content[0].text, 'GET /api/runs failed with 500: database is down');
 });
 
+const RUN_ID = '11111111-2222-3333-4444-555555555555';
+
+test('tools/list shows get_run with a run_id input', async () => {
+  const client = await clientFor('http://127.0.0.1:1');
+  const { tools } = await client.listTools();
+  const getRun = tools.find((t) => t.name === 'get_run');
+  assert.ok(getRun);
+  assert.deepEqual(getRun.inputSchema.required, ['run_id']);
+});
+
+test('get_run returns the run summary from GET /api/runs/:id', async () => {
+  const api = await fakeApi({
+    [`/api/runs/${RUN_ID}`]: { status: 200, body: { ...run(RUN_ID, 'success'), steps: [] } },
+  });
+  const client = await clientFor(api.url);
+  const result = await client.callTool({ name: 'get_run', arguments: { run_id: RUN_ID } });
+  assert.equal(result.isError, undefined);
+  const summary = parse(result);
+  assert.equal(summary.run.id, RUN_ID);
+  assert.deepEqual(summary.steps, []);
+  assert.deepEqual(api.calls, [`/api/runs/${RUN_ID}`]);
+});
+
+test('get_run passes on the API 404 for an unknown run', async () => {
+  const api = await fakeApi({
+    [`/api/runs/${RUN_ID}`]: { status: 404, body: { error: `run ${RUN_ID} not found` } },
+  });
+  const client = await clientFor(api.url);
+  const result = await client.callTool({ name: 'get_run', arguments: { run_id: RUN_ID } });
+  assert.equal(result.isError, true);
+  assert.equal(result.content[0].text, `GET /api/runs/${RUN_ID} failed with 404: run ${RUN_ID} not found`);
+});
+
+test('get_run rejects a run_id that is not a UUID without calling the API', async () => {
+  const api = await fakeApi({});
+  const client = await clientFor(api.url);
+  for (const run_id of ['abc', '../evals', '']) {
+    const result = await client.callTool({ name: 'get_run', arguments: { run_id } });
+    assert.equal(result.isError, true, `run_id ${JSON.stringify(run_id)}`);
+  }
+  assert.deepEqual(api.calls, []);
+});
+
 // Over real stdio, any stray console.log would corrupt the protocol and
 // this would fail (Rule 4).
 test('index.js serves list_runs over stdio, reading REWIND_SERVER_URL', async () => {

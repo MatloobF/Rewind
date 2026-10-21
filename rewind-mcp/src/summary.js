@@ -1,0 +1,115 @@
+// Compact views of runs and steps for tool results. Whatever a tool returns
+// goes into the calling LLM's context, so long text is clipped and the
+// repeated parts of a run are dropped.
+//
+// The biggest saving is on LLM steps: each request holds the whole
+// conversation so far plus the tool definitions, sent again at every turn.
+// The summary keeps only what is new at that step: the reply and its tool
+// calls, plus how many messages were sent.
+
+const CLIP_CHARS = 200;
+
+// The fields of a run shown in list_runs and get_run. Left out: cwd (not
+// useful to an LLM) and fork_override (get_run shows it clipped).
+export const RUN_FIELDS = [
+  'id', 'name', 'status', 'command', 'created_at',
+  'parent_run_id', 'fork_step', 'diverged_at_step',
+  'step_count', 'tokens_in', 'tokens_out', 'latency_ms',
+];
+
+export function pick(object, keys) {
+  return Object.fromEntries(keys.map((key) => [key, object[key]]));
+}
+
+// Cuts text to `max` characters and says how much was cut, so the LLM
+// knows it isn't seeing everything. Non-strings are shown as JSON.
+export function clip(value, max = CLIP_CHARS) {
+  if (value == null) return null;
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}… (+${text.length - max} chars)`;
+}
+
+// A run from GET /api/runs/:id (the run row with all its steps) as
+// { run, task, steps }. That route has no totals, so they are added up here.
+export function summarizeRun(run) {
+  const steps = run.steps ?? [];
+  const sum = (key) => steps.reduce((total, step) => total + (step[key] ?? 0), 0);
+  return {
+    run: {
+      ...pick(run, RUN_FIELDS),
+      fork_override: clip(run.fork_override),
+      step_count: steps.length,
+      tokens_in: sum('tokens_in'),
+      tokens_out: sum('tokens_out'),
+      latency_ms: sum('latency_ms'),
+    },
+    task: clip(findTask(steps)),
+    steps: steps.map(summarizeStep),
+  };
+}
+
+// The agent's task: the first user message of the run's first LLM call.
+function findTask(steps) {
+  const first = steps.find((step) => step.type === 'llm');
+  const message = first?.request?.messages?.find((m) => m.role === 'user');
+  return message ? messageText(message.content) : null;
+}
+
+export function summarizeStep(step) {
+  const summary = {
+    idx: step.idx,
+    type: step.type,
+    replayed: step.replayed,
+    latency_ms: step.latency_ms,
+    error: clip(step.error),
+  };
+  // Started but never finished: the agent died mid-call (or is still in it).
+  if (step.response == null && step.error == null) summary.state = 'no_response';
+  return step.type === 'llm'
+    ? { ...summary, ...llmDetails(step) }
+    : { ...summary, ...toolDetails(step) };
+}
+
+// LLM steps hold OpenAI chat completion bodies.
+function llmDetails({ request, response, tokens_in, tokens_out }) {
+  const choice = response?.choices?.[0];
+  const message = choice?.message;
+  return {
+    tokens_in,
+    tokens_out,
+    messages_sent: request?.messages?.length ?? 0,
+    reply: clip(messageText(message?.content)),
+    tool_calls: (message?.tool_calls ?? []).map((call) => ({
+      name: call.function?.name ?? null,
+      arguments: clip(call.function?.arguments),
+    })),
+    finish_reason: choice?.finish_reason ?? null,
+  };
+}
+
+// Tool steps hold MCP tool calls: request { name, arguments }, response an
+// MCP result { content: [...], isError? }.
+function toolDetails({ request, response }) {
+  return {
+    tool: request?.name ?? null,
+    arguments: clip(request?.arguments ?? {}),
+    result: clip(blocksText(response?.content)),
+    is_error: response?.isError === true,
+  };
+}
+
+// Chat message content is a string, or an array of parts like { type: 'text', text }.
+function messageText(content) {
+  if (typeof content === 'string') return content || null;
+  return blocksText(content);
+}
+
+function blocksText(blocks) {
+  if (!Array.isArray(blocks)) return null;
+  const text = blocks
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+  return text || null;
+}
