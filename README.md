@@ -4,7 +4,7 @@
 
 **[Live demo](https://matloobf.github.io/Rewind/)** (a read-only snapshot of recorded runs) · [Design decisions](DECISIONS.md) · [Recording Claude Code](#recording-claude-code)
 
-<!-- Demo GIF goes here (Phase 10, step 6d). -->
+![Rewind demo: the run list, a forked run's branch graph and timeline, the fork editor with an edited tool result, the diff against the parent run, and the failure patterns](docs/demo.gif)
 
 ## Why
 
@@ -140,7 +140,7 @@ rewind run --name "claude code" -- claude --bare -p "Sort the files in the sandb
   --tools "" --mcp-config claude-mcp.json --strict-mcp-config --allowedTools mcp__files
 ```
 
-`--bare` keeps your `CLAUDE.md`, memory and hooks out of the recording (it needs `ANTHROPIC_API_KEY` set). Cursor's own LLM calls go through Cursor's servers and can't be proxied, but its MCP tool calls can be recorded the same way.
+`--bare` keeps your `CLAUDE.md`, memory and hooks out of the recording (it needs `ANTHROPIC_API_KEY` set). This recipe hasn't been run end to end yet, since it needs a paid API key: the pieces it relies on (`ANTHROPIC_BASE_URL`, the Anthropic route with streaming, side-route passthrough, the MCP proxy) are each tested, but not this exact command. Cursor's own LLM calls go through Cursor's servers and can't be proxied, but its MCP tool calls can be recorded the same way.
 
 ## Ask Rewind from Claude Code or Cursor
 
