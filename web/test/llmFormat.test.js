@@ -120,3 +120,28 @@ test('new messages are counted in the mapped messages', () => {
   const previous = { ...anthropicStep, idx: 0, request: { ...anthropicStep.request, messages: anthropicStep.request.messages.slice(0, 1) } };
   assert.equal(previousMessageCount([previous, anthropicStep], anthropicStep), 2);
 });
+
+// OpenAI-format LLM step with the given idx and message texts (alternating user/assistant).
+const chatStep = (idx, ...texts) => ({
+  idx,
+  type: 'llm',
+  format: 'openai',
+  request: { messages: texts.map((content, i) => ({ role: i % 2 ? 'assistant' : 'user', content })) },
+});
+
+test('a step in an unrelated conversation has only new messages', () => {
+  // The Phase 10 streaming check: two one-message calls that share nothing.
+  const steps = [chatStep(0, 'Say hello'), chatStep(1, 'Say goodbye')];
+  assert.equal(previousMessageCount(steps, steps[1]), 0);
+});
+
+test('a side call in between does not hide the main conversation', () => {
+  // Main call, a small side call (e.g. a title), then the main conversation goes on.
+  const steps = [chatStep(0, 'task'), chatStep(1, 'title this'), chatStep(2, 'task', 'reply', 'more')];
+  assert.equal(previousMessageCount(steps, steps[2]), 1);
+});
+
+test('only identical messages count as already sent', () => {
+  const steps = [chatStep(0, 'task', 'reply'), chatStep(1, 'task', 'edited reply', 'more')];
+  assert.equal(previousMessageCount(steps, steps[1]), 1);
+});

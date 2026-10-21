@@ -24,10 +24,24 @@ export function stepSummary(step) {
   return typeof reply.content === 'string' && reply.content ? reply.content : '(empty reply)';
 }
 
-// How many of this LLM step's request messages the previous LLM step had
-// already sent. Everything after that index is new at this step.
+// How many of this LLM step's request messages an earlier LLM step had
+// already sent: the longest run of identical leading messages shared with
+// any earlier step. Everything after that index is new at this step.
+// Not just the step before: an agent can interleave separate conversations
+// (Claude Code makes small side calls between its main ones).
 export function previousMessageCount(steps, step) {
-  const earlier = steps.filter((s) => s.type === 'llm' && s.idx < step.idx);
-  const previous = earlier.at(-1);
-  return previous ? requestMessages(previous).length : 0;
+  const messages = requestMessages(step).map((m) => JSON.stringify(m));
+  let shared = 0;
+  for (const earlier of steps) {
+    if (earlier.type !== 'llm' || earlier.idx >= step.idx) continue;
+    shared = Math.max(shared, sharedPrefix(messages, requestMessages(earlier).map((m) => JSON.stringify(m))));
+  }
+  return shared;
+}
+
+// How many leading items two arrays of strings have in common.
+function sharedPrefix(a, b) {
+  let n = 0;
+  while (n < a.length && n < b.length && a[n] === b[n]) n++;
+  return n;
 }
