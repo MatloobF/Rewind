@@ -22,6 +22,18 @@ export function canonicalJson(value) {
   return JSON.stringify(value);
 }
 
+// A copy of `request` with its transport fields taken from `from`. At a fork
+// step the edited request is sent, but it must be delivered the way the agent
+// asked (a streaming agent can't read a JSON answer, and back).
+export function withTransportOf(request, from) {
+  const result = { ...request };
+  for (const field of TRANSPORT_FIELDS) {
+    delete result[field];
+    if (from[field] !== undefined) result[field] = from[field];
+  }
+  return result;
+}
+
 // SHA-256 (hex) of the canonical request, minus top-level transport fields.
 // The one hash function used everywhere: replay compares these hashes.
 export function hashRequest(request) {

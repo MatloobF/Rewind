@@ -57,6 +57,24 @@ export function createSseParser() {
   };
 }
 
+// The other way round: a stored chat.completion as SSE text, for a streaming
+// agent in a fork (a replayed or overridden step makes no live call, so there
+// is no upstream stream to forward). Each choice goes out as one chunk holding
+// the whole message, which streaming clients accept like many small ones.
+// usage is sent only if the agent asked for it, as upstream would.
+export function chatChunks(response, { includeUsage = false } = {}) {
+  const { object, choices = [], usage, ...meta } = response;
+  const chunk = (fields) => `data: ${JSON.stringify({ ...meta, object: 'chat.completion.chunk', ...fields })}\n\n`;
+  let text = '';
+  for (const { index, message = {}, finish_reason } of choices) {
+    const delta = { ...message };
+    if (message.tool_calls) delta.tool_calls = message.tool_calls.map((call, i) => ({ index: i, ...call }));
+    text += chunk({ choices: [{ index, delta, finish_reason }] });
+  }
+  if (includeUsage && usage) text += chunk({ choices: [], usage });
+  return `${text}data: [DONE]\n\n`;
+}
+
 // Rebuilds a chat.completion from chat.completion.chunk events.
 // Each chunk's choices[i].delta holds the new part of the message: text is
 // appended, tool calls are merged by their index (their arguments arrive as

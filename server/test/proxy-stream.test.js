@@ -6,6 +6,9 @@ import http from 'node:http';
 import { createApp } from '../src/app.js';
 import { migrate } from '../src/migrate.js';
 import { pool } from '../src/db.js';
+import { createRun, setRunStatus } from '../src/runs.js';
+import { startStep, finishStep } from '../src/steps.js';
+import { createSseParser, createChatAssembler } from '../src/sse.js';
 
 const TEST_NAME = 'proxy-stream-test';
 
@@ -228,4 +231,129 @@ test('an agent that hangs up mid-stream is recorded', async () => {
   const step = await finishedStep(runId);
   assert.equal(step.error, 'agent disconnected mid-stream');
   assert.equal(step.response.choices[0].message.content, 'He');
+});
+
+// --- Fork runs: a streaming agent still gets streams back ---
+
+// The parent was recorded without streaming; the fork's agent streams. The
+// hash ignores `stream`, so the requests still match.
+const plainRequest = { model: 'rewind-qwen', messages: [{ role: 'user', content: 'hi' }] };
+const moreRequest = { model: 'rewind-qwen', messages: [{ role: 'user', content: 'more' }] };
+const parentAnswer = {
+  id: 'chatcmpl-parent',
+  object: 'chat.completion',
+  created: 1600000000,
+  model: 'rewind-qwen',
+  choices: [{ index: 0, message: { role: 'assistant', content: 'from the parent' }, finish_reason: 'stop' }],
+  usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+};
+
+// A finished parent run with the given llm steps, recorded through the store.
+async function recordParent(steps) {
+  const run = await createRun({ name: TEST_NAME, command: ['node', 'agent.js'], cwd: '.' });
+  for (const { request, result } of steps) {
+    const { idx } = await startStep(run.id, { type: 'llm', request });
+    await finishStep(run.id, idx, result);
+  }
+  await setRunStatus(run.id, 'success');
+  return run;
+}
+
+async function forkOf(parent, forkStep, forkOverride = null) {
+  const run = await createRun({
+    name: TEST_NAME, command: ['node', 'agent.js'], cwd: '.', parentRunId: parent.id, forkStep, forkOverride,
+  });
+  return run.id;
+}
+
+// Reads a whole SSE response and rebuilds the answer the agent's SDK would see.
+async function readStream(res) {
+  assert.match(res.headers.get('content-type'), /^text\/event-stream/);
+  const parser = createSseParser();
+  const assembler = createChatAssembler();
+  const events = [...parser.push(new Uint8Array(await res.arrayBuffer())), ...parser.end()];
+  for (const { data } of events) assembler.add(data);
+  return assembler.result();
+}
+
+test('a replayed step is streamed to a streaming agent, without calling upstream', async () => {
+  const parent = await recordParent([
+    { request: plainRequest, result: { response: parentAnswer } },
+    { request: moreRequest, result: { response: parentAnswer } },
+  ]);
+  const runId = await forkOf(parent, 1);
+
+  const res = await chat(runId, streamRequest);
+  assert.equal(res.status, 200);
+  // include_usage was asked for, so usage comes along.
+  assert.deepEqual(await readStream(res), { response: parentAnswer, error: null });
+  assert.equal(received, undefined);
+  assert.equal((await stepsOf(runId))[0].replayed, true);
+
+  // Without include_usage, no usage chunk.
+  const runId2 = await forkOf(parent, 1);
+  const { response } = await readStream(await chat(runId2, { ...plainRequest, stream: true }));
+  assert.equal('usage' in response, false);
+  assert.equal(response.choices[0].message.content, 'from the parent');
+});
+
+test('a replayed error stays JSON with its status, even for a streaming agent', async () => {
+  const errorBody = { error: { message: 'model "nope" not found' } };
+  const parent = await recordParent([
+    { request: plainRequest, result: { response: errorBody, error: 'upstream HTTP 404: model "nope" not found' } },
+    { request: moreRequest, result: { response: parentAnswer } },
+  ]);
+  const runId = await forkOf(parent, 1);
+
+  const res = await chat(runId, streamRequest);
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), errorBody);
+});
+
+test('a response override is streamed to a streaming agent', async () => {
+  const parent = await recordParent([{ request: plainRequest, result: { response: parentAnswer } }]);
+  const edited = {
+    ...parentAnswer,
+    choices: [{ index: 0, message: { role: 'assistant', content: 'edited' }, finish_reason: 'stop' }],
+  };
+  const runId = await forkOf(parent, 0, { kind: 'response', response: edited });
+
+  const { response } = await readStream(await chat(runId, streamRequest));
+  assert.equal(response.choices[0].message.content, 'edited');
+  assert.equal(received, undefined);
+});
+
+test('a request override is sent with the agent\'s stream fields and relayed as a stream', async () => {
+  const parent = await recordParent([{ request: plainRequest, result: { response: parentAnswer } }]);
+  // The edit came from the non-streaming parent: no stream fields.
+  const edited = { ...plainRequest, model: 'other-model' };
+  const runId = await forkOf(parent, 0, { kind: 'request', request: edited });
+
+  const res = await chat(runId, streamRequest);
+  assert.equal(await res.text(), helloChunks.join(''));
+  const sent = { ...edited, stream: true, stream_options: { include_usage: true } };
+  assert.deepEqual(JSON.parse(received), sent);
+
+  const step = await finishedStep(runId);
+  assert.deepEqual(step.request, sent);
+  assert.deepEqual(step.response, helloResponse);
+});
+
+test('a streaming fork that diverges goes live and streams from upstream', async () => {
+  const parent = await recordParent([
+    { request: plainRequest, result: { response: parentAnswer } },
+    { request: moreRequest, result: { response: parentAnswer } },
+  ]);
+  const runId = await forkOf(parent, 1);
+
+  // Step 0 asks something else than the parent did.
+  const res = await chat(runId, { ...streamRequest, messages: [{ role: 'user', content: 'different' }] });
+  assert.equal(await res.text(), helloChunks.join(''));
+  assert.notEqual(received, undefined);
+
+  const step = await finishedStep(runId);
+  assert.equal(step.replayed, false);
+  assert.deepEqual(step.response, helloResponse);
+  const { rows } = await pool.query('SELECT diverged_at_step FROM runs WHERE id = $1', [runId]);
+  assert.equal(rows[0].diverged_at_step, 0);
 });

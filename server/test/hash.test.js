@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { canonicalJson, hashRequest } from '../src/hash.js';
+import { canonicalJson, hashRequest, withTransportOf } from '../src/hash.js';
 
 const request = {
   model: 'rewind-qwen',
@@ -67,4 +67,13 @@ test('canonicalJson matches JSON.stringify for undefined and nested values', () 
   assert.equal(canonicalJson({ b: undefined, a: [1, undefined] }), '{"a":[1,null]}');
   assert.equal(canonicalJson({ z: { y: 1, x: 2 } }), '{"z":{"x":2,"y":1}}');
   assert.equal(canonicalJson('héllo "q"'), JSON.stringify('héllo "q"'));
+});
+
+test('withTransportOf swaps in the other request\'s transport fields only', () => {
+  const edited = { ...request, model: 'other', stream: false };
+  const agent = { ...request, stream: true, stream_options: { include_usage: true } };
+  assert.deepEqual(withTransportOf(edited, agent), { ...request, model: 'other', stream: true, stream_options: { include_usage: true } });
+  // Fields the agent didn't send are removed, not kept from the edit.
+  assert.deepEqual(withTransportOf({ ...request, stream: true }, request), request);
+  assert.equal(edited.stream, false); // Input untouched.
 });

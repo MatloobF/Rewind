@@ -1,7 +1,7 @@
 // SSE parsing and chat.completion rebuilding. Pure functions: no server, no DB.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSseParser, createChatAssembler } from '../src/sse.js';
+import { createSseParser, createChatAssembler, chatChunks } from '../src/sse.js';
 
 const bytes = (text) => new TextEncoder().encode(text);
 
@@ -111,4 +111,36 @@ test('notes problems without throwing, keeping what it rebuilt', () => {
   const failed = assemble([{ error: { message: 'model crashed' } }, '[DONE]']);
   assert.equal(failed.error, 'upstream stream error: model crashed');
   assert.equal(failed.response, null);
+});
+
+// Parses SSE text and rebuilds the response from it.
+function reassemble(text) {
+  const assembler = createChatAssembler();
+  for (const { data } of parse([text])) assembler.add(data);
+  return assembler.result();
+}
+
+test('chatChunks turns a stored response back into a stream that rebuilds to it', () => {
+  const stored = {
+    id: 'chatcmpl-1',
+    object: 'chat.completion',
+    created: 1700000000,
+    model: 'rewind-qwen',
+    choices: [{
+      index: 0,
+      message: {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call_a', type: 'function', function: { name: 'list_files', arguments: '{"path":"."}' } }],
+      },
+      finish_reason: 'tool_calls',
+    }],
+    usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+  };
+  assert.deepEqual(reassemble(chatChunks(stored, { includeUsage: true })), { response: stored, error: null });
+
+  // Without include_usage the stream has no usage chunk, as from upstream.
+  const { usage, ...withoutUsage } = stored;
+  assert.deepEqual(reassemble(chatChunks(stored)).response, withoutUsage);
+  assert.ok(chatChunks(stored).endsWith('data: [DONE]\n\n'));
 });

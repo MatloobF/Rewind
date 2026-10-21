@@ -9,7 +9,7 @@
 import express, { Router } from 'express';
 import { badRequest } from './errors.js';
 import { startStep, finishStep } from './steps.js';
-import { createSseParser, createChatAssembler } from './sse.js';
+import { createSseParser, createChatAssembler, chatChunks } from './sse.js';
 import { isUuid, isPlainObject } from './validate.js';
 
 // Headers passed through to the upstream. Others (host, content-length,
@@ -37,8 +37,8 @@ export function createProxy({ upstreamUrl }) {
     const { idx } = step;
 
     // No upstream call: the step is already finished in the database.
-    if (step.mode === 'replay') return sendRecorded(res, step.response, step.error);
-    if (step.mode === 'override' && step.response) return res.status(200).json(step.response);
+    if (step.mode === 'replay') return sendRecorded(res, request, step.response, step.error);
+    if (step.mode === 'override' && step.response) return sendResponse(res, request, step.response);
 
     // Live call: the agent's exact bytes, or the edited request at a fork step.
     const body = step.mode === 'override' ? JSON.stringify(step.request) : rawBody;
@@ -160,11 +160,21 @@ function pickHeaders(headers) {
 // allows. The status isn't stored, but describeError wrote it into the error
 // text. A failure with no recorded body (unreachable upstream, non-JSON body)
 // is sent as 502 { error }, like an unreachable upstream in record mode.
-function sendRecorded(res, response, error) {
-  if (error == null) return res.status(200).json(response);
+// Errors stay JSON even for a streaming agent: upstream answers them that way.
+function sendRecorded(res, request, response, error) {
+  if (error == null) return sendResponse(res, request, response);
   const status = Number(error.match(/^upstream HTTP (\d{3})/)?.[1]);
   if (status && response != null) return res.status(status).json(response);
   return res.status(502).json({ error });
+}
+
+// Sends a stored response the way this agent asked for it: as an SSE stream
+// if its request said stream: true (whether or not the parent streamed: the
+// hash ignores `stream`), else as JSON.
+function sendResponse(res, request, response) {
+  if (!request.stream) return res.status(200).json(response);
+  const includeUsage = request.stream_options?.include_usage === true;
+  res.status(200).type('text/event-stream; charset=utf-8').send(chatChunks(response, { includeUsage }));
 }
 
 // The error column for an upstream answer, or null if it was a normal reply.

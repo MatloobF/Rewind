@@ -2,7 +2,7 @@
 // after it. All replay decisions are made in startStep, so the LLM proxy and
 // the MCP proxy both just follow the mode it returns.
 import { pool, withTransaction } from './db.js';
-import { hashRequest } from './hash.js';
+import { hashRequest, withTransportOf } from './hash.js';
 import { notFound, conflict } from './errors.js';
 
 // Starts a step: assigns the next idx and saves the request. Returns
@@ -78,9 +78,11 @@ async function applyOverride(client, step, override) {
     await insertStep(client, step, { response: override.response });
     return { idx, mode: 'override', response: override.response };
   }
-  const edited = { ...step, request: override.request, hash: hashRequest(override.request) };
+  // Delivered as the agent asked: its stream/stream_options, not the edit's.
+  const request = withTransportOf(override.request, step.request);
+  const edited = { ...step, request, hash: hashRequest(request) };
   await insertStep(client, edited);
-  return { idx, mode: 'override', request: override.request };
+  return { idx, mode: 'override', request };
 }
 
 // True while a fork run is still on its parent's path: it has a parent,
