@@ -1,9 +1,13 @@
 // Streamed LLM answers (server-sent events, SSE).
-// With `stream: true`, an OpenAI-compatible server answers with
-// `text/event-stream`: a series of `data: {chunk}` events, each a small
-// delta, ended by `data: [DONE]`. The proxy forwards those bytes unchanged
-// and feeds a copy through here, to rebuild the response a non-streaming
-// call would have returned. So a step is stored in one shape either way.
+// With `stream: true`, the server answers with `text/event-stream`:
+//   OpenAI format     `data: {chunk}` events, each a small delta, then
+//                     `data: [DONE]`
+//   Anthropic format  named events (message_start, content_block_delta, ...)
+//                     that build the message block by block, then message_stop
+// The proxy forwards those bytes unchanged and feeds a copy through here, to
+// rebuild the response a non-streaming call would have returned. So a step is
+// stored in one shape either way. For replay, the stored response is turned
+// back into a stream (chatChunks, messageEvents).
 
 // Splits a byte stream into SSE events. Network chunks can end mid-line or
 // mid-event, so an incomplete line is kept until the rest arrives. An event
@@ -153,4 +157,129 @@ export function createChatAssembler() {
       return { response, error: error ?? (sawDone ? null : 'upstream stream ended before [DONE]') };
     },
   };
+}
+
+// Rebuilds an Anthropic message from its stream events:
+//   message_start        the message, with empty content and the input usage
+//   content_block_start  block i begins (text, tool_use, thinking, ...)
+//   content_block_delta  more of block i: text_delta.text, thinking_delta.thinking,
+//                        signature_delta.signature are appended; a tool's
+//                        input arrives as input_json_delta.partial_json, pieces
+//                        of a JSON string, parsed at content_block_stop
+//   message_delta        stop_reason, and usage (output_tokens) merged in
+//   message_stop         the end; a stream without it was cut short
+// ping events are keep-alives. Never throws, like createChatAssembler.
+export function createMessageAssembler() {
+  let message = null;
+  const content = [];
+  const json = []; // Unparsed tool input text, per block index.
+  let sawStop = false;
+  let error = null;
+
+  // A tool block's collected input JSON becomes its input. No pieces at all
+  // means the input from content_block_start ({}) stands.
+  function finishBlock(index) {
+    if (!json[index]) return;
+    try {
+      content[index].input = JSON.parse(json[index]);
+    } catch {
+      error ??= `upstream stream had invalid tool input JSON in block ${index}`;
+    }
+    json[index] = undefined;
+  }
+
+  function addDelta(index, { type, partial_json, ...fields }) {
+    const block = content[index];
+    if (!block) {
+      error ??= `upstream stream sent a ${type} for unknown block ${index}`;
+      return;
+    }
+    if (partial_json != null) json[index] = (json[index] ?? '') + partial_json;
+    for (const [key, value] of Object.entries(fields)) {
+      if (typeof value === 'string') block[key] = (block[key] ?? '') + value;
+      else if (key === 'citation') (block.citations ??= []).push(value);
+    }
+  }
+
+  return {
+    add(data) {
+      let event;
+      try {
+        event = JSON.parse(data);
+      } catch {
+        error ??= 'upstream stream had a non-JSON event';
+        return;
+      }
+      switch (event?.type) {
+        case 'message_start':
+          message = { ...event.message };
+          break;
+        case 'content_block_start':
+          content[event.index] = { ...event.content_block };
+          break;
+        case 'content_block_delta':
+          addDelta(event.index, event.delta ?? {});
+          break;
+        case 'content_block_stop':
+          finishBlock(event.index);
+          break;
+        case 'message_delta':
+          if (!message) break;
+          Object.assign(message, event.delta);
+          if (event.usage) message.usage = { ...message.usage, ...event.usage };
+          break;
+        case 'message_stop':
+          sawStop = true;
+          break;
+        case 'error': {
+          const text = event.error?.message ?? event.error;
+          error ??= `upstream stream error: ${typeof text === 'string' ? text : JSON.stringify(text)}`;
+          break;
+        }
+        // ping, and event types added later: nothing to record.
+      }
+    },
+
+    result() {
+      json.forEach((_, index) => finishBlock(index)); // A block cut off before its stop.
+      const response = message ? { ...message, content: content.filter(Boolean) } : null;
+      return { response, error: error ?? (sawStop ? null : 'upstream stream ended before message_stop') };
+    },
+  };
+}
+
+// The field of each block type that streams in deltas, and its delta type.
+// Other block types (redacted_thinking, ...) arrive whole in their start event.
+const STREAMED_FIELDS = {
+  text: { field: 'text', delta: 'text_delta' },
+  thinking: { field: 'thinking', delta: 'thinking_delta' },
+};
+
+// A stored Anthropic message as SSE text, for a streaming agent in a fork.
+// Each block is sent as start (streamed field empty), one delta with all of
+// it, and stop. The full usage goes in message_start, and output_tokens again
+// in message_delta, as the API does.
+export function messageEvents(response) {
+  const event = (type, fields) => `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
+  const { content = [], stop_reason = null, stop_sequence = null, ...rest } = response;
+  let text = event('message_start', { message: { ...rest, content: [], stop_reason: null, stop_sequence: null } });
+
+  content.forEach((block, index) => {
+    const streamed = STREAMED_FIELDS[block.type];
+    if (streamed) {
+      text += event('content_block_start', { index, content_block: { ...block, [streamed.field]: '' } });
+      text += event('content_block_delta', { index, delta: { type: streamed.delta, [streamed.field]: block[streamed.field] } });
+    } else if ('input' in block) {
+      // tool_use, server_tool_use: the input goes out as a JSON string.
+      text += event('content_block_start', { index, content_block: { ...block, input: {} } });
+      text += event('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } });
+    } else {
+      text += event('content_block_start', { index, content_block: block });
+    }
+    text += event('content_block_stop', { index });
+  });
+
+  const usage = rest.usage?.output_tokens != null ? { output_tokens: rest.usage.output_tokens } : undefined;
+  text += event('message_delta', { delta: { stop_reason, stop_sequence }, ...(usage && { usage }) });
+  return text + event('message_stop', {});
 }

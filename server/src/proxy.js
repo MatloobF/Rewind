@@ -1,8 +1,9 @@
 // LLM recording proxy, in two API formats:
 //   POST /r/:runId/v1/chat/completions   OpenAI format (Ollama, OpenAI, ...)
 //   POST /r/:runId/v1/messages           Anthropic format (Anthropic, Ollama)
-// Both work the same way; only the upstream, the path and where the token
-// counts are differ (FORMATS below). The step's `format` records which one.
+// Both work the same way. What differs (the upstream, the path, where the
+// token counts are, how a stream is read and replayed) is in FORMATS below.
+// The step's `format` records which one.
 // An agent is recorded by pointing its base URL at /r/:runId. The proxy
 // forwards the request bytes unchanged to the real LLM and sends back the
 // upstream status and body unchanged, recording both as one 'llm' step.
@@ -13,7 +14,9 @@
 import express, { Router } from 'express';
 import { badRequest } from './errors.js';
 import { startStep, finishStep } from './steps.js';
-import { createSseParser, createChatAssembler, chatChunks } from './sse.js';
+import {
+  createSseParser, createChatAssembler, chatChunks, createMessageAssembler, messageEvents,
+} from './sse.js';
 import { isUuid, isPlainObject } from './validate.js';
 
 // Headers passed through to the upstream. Others (host, content-length,
@@ -24,10 +27,23 @@ const FORWARDED_HEADERS = [
   'x-api-key', 'anthropic-version', 'anthropic-beta', // Anthropic format
 ];
 
-// What differs between the formats: the upstream path and the token counts.
+// What differs between the formats: the upstream path, the token counts, the
+// assembler that rebuilds a streamed answer, and the replay stream.
 const FORMATS = {
-  openai: { path: '/v1/chat/completions', tokensOf: openaiTokens },
-  anthropic: { path: '/v1/messages', tokensOf: anthropicTokens },
+  openai: {
+    path: '/v1/chat/completions',
+    tokensOf: openaiTokens,
+    createAssembler: createChatAssembler,
+    // usage only if the agent asked for it, as upstream would.
+    toStream: (response, request) =>
+      chatChunks(response, { includeUsage: request.stream_options?.include_usage === true }),
+  },
+  anthropic: {
+    path: '/v1/messages',
+    tokensOf: anthropicTokens,
+    createAssembler: createMessageAssembler,
+    toStream: (response) => messageEvents(response),
+  },
 };
 
 // upstreamUrl serves the OpenAI format. anthropicUpstreamUrl serves the
@@ -51,7 +67,7 @@ export function createProxy({ upstreamUrl, anthropicUpstreamUrl = upstreamUrl })
 
 // One LLM call, recorded as one 'llm' step in the given format.
 async function handleCall(req, res, format, upstream) {
-  const { path, tokensOf } = FORMATS[format];
+  const api = FORMATS[format];
   const { runId } = req.params;
   if (!isUuid(runId)) throw badRequest('run id must be a UUID');
 
@@ -60,22 +76,19 @@ async function handleCall(req, res, format, upstream) {
   if (!isPlainObject(request)) {
     throw badRequest('request body must be a JSON object');
   }
-  if (format === 'anthropic' && request.stream) {
-    throw badRequest('streaming on /v1/messages is not supported yet (Phase 9)');
-  }
   const step = await startStep(runId, { type: 'llm', format, request });
   const { idx } = step;
 
   // No upstream call: the step is already finished in the database.
-  if (step.mode === 'replay') return sendRecorded(res, request, step.response, step.error);
-  if (step.mode === 'override' && step.response) return sendResponse(res, request, step.response);
+  if (step.mode === 'replay') return sendRecorded(res, api, request, step.response, step.error);
+  if (step.mode === 'override' && step.response) return sendResponse(res, api, request, step.response);
 
   // Live call: the agent's exact bytes, or the edited request at a fork step.
   const body = step.mode === 'override' ? JSON.stringify(step.request) : rawBody;
   const started = Date.now();
   let upstreamRes;
   try {
-    upstreamRes = await fetch(`${upstream}${path}`, {
+    upstreamRes = await fetch(`${upstream}${api.path}`, {
       method: 'POST',
       headers: pickHeaders(req.headers),
       body,
@@ -89,7 +102,7 @@ async function handleCall(req, res, format, upstream) {
   // A streamed answer. An error status comes back as plain JSON even for a
   // streaming request, so it takes the buffered path below.
   if (upstreamRes.ok && isEventStream(upstreamRes)) {
-    return relayStream(res, upstreamRes, { runId, idx, started });
+    return relayStream(res, upstreamRes, { api, runId, idx, started });
   }
 
   const bodyBuffer = Buffer.from(await upstreamRes.arrayBuffer());
@@ -100,7 +113,7 @@ async function handleCall(req, res, format, upstream) {
     response: response ?? null,
     error: describeError(upstreamRes.status, response),
     latency_ms,
-    ...tokensOf(response),
+    ...api.tokensOf(response),
   });
 
   // Send the upstream answer back unchanged.
@@ -112,13 +125,13 @@ async function handleCall(req, res, format, upstream) {
 // Forwards a streamed answer to the agent chunk by chunk, as it arrives, with
 // the bytes unchanged (Rule 2). A copy of each chunk goes to the parser, and
 // the rebuilt response is recorded once the stream ends.
-async function relayStream(res, upstreamRes, { runId, idx, started }) {
+async function relayStream(res, upstreamRes, { api, runId, idx, started }) {
   res.status(upstreamRes.status);
   res.type(upstreamRes.headers.get('content-type'));
   res.flushHeaders(); // The agent's SDK starts reading now, not at the end.
 
   const parser = createSseParser();
-  const assembler = createChatAssembler();
+  const assembler = api.createAssembler();
   const addEvents = (events) => events.forEach((event) => assembler.add(event.data));
   // 'close' before we end the response means the agent hung up.
   let agentGone = false;
@@ -145,7 +158,7 @@ async function relayStream(res, upstreamRes, { runId, idx, started }) {
     response,
     error: failure ?? error,
     latency_ms: Date.now() - started,
-    ...openaiTokens(response),
+    ...api.tokensOf(response),
   });
 
   // An upstream that broke off is passed on as a broken-off stream, so the
@@ -199,8 +212,8 @@ function pickHeaders(headers) {
 // text. A failure with no recorded body (unreachable upstream, non-JSON body)
 // is sent as 502 { error }, like an unreachable upstream in record mode.
 // Errors stay JSON even for a streaming agent: upstream answers them that way.
-function sendRecorded(res, request, response, error) {
-  if (error == null) return sendResponse(res, request, response);
+function sendRecorded(res, api, request, response, error) {
+  if (error == null) return sendResponse(res, api, request, response);
   const status = Number(error.match(/^upstream HTTP (\d{3})/)?.[1]);
   if (status && response != null) return res.status(status).json(response);
   return res.status(502).json({ error });
@@ -209,10 +222,9 @@ function sendRecorded(res, request, response, error) {
 // Sends a stored response the way this agent asked for it: as an SSE stream
 // if its request said stream: true (whether or not the parent streamed: the
 // hash ignores `stream`), else as JSON.
-function sendResponse(res, request, response) {
+function sendResponse(res, api, request, response) {
   if (!request.stream) return res.status(200).json(response);
-  const includeUsage = request.stream_options?.include_usage === true;
-  res.status(200).type('text/event-stream; charset=utf-8').send(chatChunks(response, { includeUsage }));
+  res.status(200).type('text/event-stream; charset=utf-8').send(api.toStream(response, request));
 }
 
 // The error column for an upstream answer, or null if it was a normal reply.

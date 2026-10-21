@@ -1,7 +1,9 @@
 // SSE parsing and chat.completion rebuilding. Pure functions: no server, no DB.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSseParser, createChatAssembler, chatChunks } from '../src/sse.js';
+import {
+  createSseParser, createChatAssembler, chatChunks, createMessageAssembler, messageEvents,
+} from '../src/sse.js';
 
 const bytes = (text) => new TextEncoder().encode(text);
 
@@ -143,4 +145,104 @@ test('chatChunks turns a stored response back into a stream that rebuilds to it'
   const { usage, ...withoutUsage } = stored;
   assert.deepEqual(reassemble(chatChunks(stored)).response, withoutUsage);
   assert.ok(chatChunks(stored).endsWith('data: [DONE]\n\n'));
+});
+
+// --- Anthropic format ---
+
+// Runs event objects through a message assembler.
+function assembleMessage(events) {
+  const assembler = createMessageAssembler();
+  for (const event of events) assembler.add(typeof event === 'string' ? event : JSON.stringify(event));
+  return assembler.result();
+}
+
+const start = {
+  type: 'message_start',
+  message: {
+    id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-test', content: [],
+    stop_reason: null, stop_sequence: null, usage: { input_tokens: 9, output_tokens: 1 },
+  },
+};
+const stop = [
+  { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 4 } },
+  { type: 'message_stop' },
+];
+
+test('rebuilds thinking and text blocks, merging usage from message_delta', () => {
+  const { response, error } = assembleMessage([
+    start,
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Hmm, ' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'files.' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'ping' },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Done.' } },
+    { type: 'content_block_stop', index: 1 },
+    ...stop,
+  ]);
+  assert.equal(error, null);
+  assert.deepEqual(response, {
+    ...start.message,
+    content: [
+      { type: 'thinking', thinking: 'Hmm, files.', signature: 'sig' },
+      { type: 'text', text: 'Done.' },
+    ],
+    stop_reason: 'end_turn',
+    usage: { input_tokens: 9, output_tokens: 4 },
+  });
+});
+
+test('a tool input with no JSON pieces keeps the input from its start event', () => {
+  const { response } = assembleMessage([
+    start,
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'list_files', input: {} } },
+    { type: 'content_block_stop', index: 0 },
+    ...stop,
+  ]);
+  assert.deepEqual(response.content[0].input, {});
+});
+
+test('notes Anthropic stream problems without throwing', () => {
+  const failed = assembleMessage([start, { type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }]);
+  assert.equal(failed.error, 'upstream stream error: Overloaded');
+
+  const badJson = assembleMessage([
+    start,
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'x', input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"a":' } },
+    { type: 'content_block_stop', index: 0 },
+    ...stop,
+  ]);
+  assert.equal(badJson.error, 'upstream stream had invalid tool input JSON in block 0');
+
+  const cut = assembleMessage([start]);
+  assert.equal(cut.error, 'upstream stream ended before message_stop');
+  assert.deepEqual(cut.response.content, []);
+});
+
+test('messageEvents turns a stored message back into a stream that rebuilds to it', () => {
+  const stored = {
+    id: 'msg_1',
+    type: 'message',
+    role: 'assistant',
+    model: 'claude-test',
+    content: [
+      { type: 'thinking', thinking: 'Let me look.', signature: 'sig' },
+      { type: 'text', text: 'Listing files.' },
+      { type: 'tool_use', id: 'toolu_1', name: 'list_files', input: { path: '.', deep: true } },
+      { type: 'redacted_thinking', data: 'abc' },
+    ],
+    stop_reason: 'tool_use',
+    stop_sequence: null,
+    usage: { input_tokens: 10, cache_read_input_tokens: 5, output_tokens: 25 },
+  };
+  const events = parse([messageEvents(stored)]);
+  assert.equal(events[0].event, 'message_start');
+  assert.equal(events.at(-1).event, 'message_stop');
+
+  const assembler = createMessageAssembler();
+  for (const { data } of events) assembler.add(data);
+  assert.deepEqual(assembler.result(), { response: stored, error: null });
 });
