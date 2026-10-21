@@ -2,11 +2,14 @@
 // An agent is recorded by pointing its base URL at /r/:runId/v1. The proxy
 // forwards the request bytes unchanged to the real LLM and sends back the
 // upstream status and body unchanged, recording both as one 'llm' step.
+// A streamed answer (stream: true) is forwarded chunk by chunk as it arrives
+// and recorded in the same shape as a non-streamed one (see sse.js).
 // In a fork run, startStep may instead say to replay the parent's answer or
 // apply the fork override (Rule 6); the proxy just follows that mode.
 import express, { Router } from 'express';
 import { badRequest } from './errors.js';
 import { startStep, finishStep } from './steps.js';
+import { createSseParser, createChatAssembler } from './sse.js';
 import { isUuid, isPlainObject } from './validate.js';
 
 // Headers passed through to the upstream. Others (host, content-length,
@@ -30,8 +33,6 @@ export function createProxy({ upstreamUrl }) {
     if (!isPlainObject(request)) {
       throw badRequest('request body must be a JSON object');
     }
-    if (request.stream) throw badRequest('streaming is not supported yet (planned for Phase 9)');
-
     const step = await startStep(runId, { type: 'llm', request });
     const { idx } = step;
 
@@ -55,6 +56,12 @@ export function createProxy({ upstreamUrl }) {
       await finishStep(runId, idx, { error, latency_ms: Date.now() - started });
       return res.status(502).json({ error });
     }
+    // A streamed answer. An error status comes back as plain JSON even for a
+    // streaming request, so it takes the buffered path below.
+    if (upstreamRes.ok && isEventStream(upstreamRes)) {
+      return relayStream(res, upstreamRes, { runId, idx, started });
+    }
+
     const bodyBuffer = Buffer.from(await upstreamRes.arrayBuffer());
     const latency_ms = Date.now() - started;
 
@@ -63,8 +70,7 @@ export function createProxy({ upstreamUrl }) {
       response: response ?? null,
       error: describeError(upstreamRes.status, response),
       latency_ms,
-      tokens_in: response?.usage?.prompt_tokens ?? null,
-      tokens_out: response?.usage?.completion_tokens ?? null,
+      ...tokensOf(response),
     });
 
     // Send the upstream answer back unchanged.
@@ -74,6 +80,63 @@ export function createProxy({ upstreamUrl }) {
   });
 
   return proxy;
+}
+
+// Forwards a streamed answer to the agent chunk by chunk, as it arrives, with
+// the bytes unchanged (Rule 2). A copy of each chunk goes to the parser, and
+// the rebuilt response is recorded once the stream ends.
+async function relayStream(res, upstreamRes, { runId, idx, started }) {
+  res.status(upstreamRes.status);
+  res.type(upstreamRes.headers.get('content-type'));
+  res.flushHeaders(); // The agent's SDK starts reading now, not at the end.
+
+  const parser = createSseParser();
+  const assembler = createChatAssembler();
+  const addEvents = (events) => events.forEach((event) => assembler.add(event.data));
+  // 'close' before we end the response means the agent hung up.
+  let agentGone = false;
+  res.on('close', () => { agentGone = true; });
+  let failure = null;
+  try {
+    for await (const chunk of upstreamRes.body) {
+      // Leaving the loop cancels the upstream body, which closes that
+      // connection too: nobody is left to read the rest.
+      if (agentGone) {
+        failure = 'agent disconnected mid-stream';
+        break;
+      }
+      res.write(chunk);
+      addEvents(parser.push(chunk));
+    }
+    addEvents(parser.end());
+  } catch (err) {
+    failure = `upstream stream failed: ${err.cause?.code ?? err.message}`;
+  }
+
+  const { response, error } = assembler.result();
+  await finishStep(runId, idx, {
+    response,
+    error: failure ?? error,
+    latency_ms: Date.now() - started,
+    ...tokensOf(response),
+  });
+
+  // An upstream that broke off is passed on as a broken-off stream, so the
+  // agent sees the same failure it would without the proxy.
+  if (failure) res.destroy();
+  else res.end();
+}
+
+function isEventStream(upstreamRes) {
+  return /^text\/event-stream\b/i.test(upstreamRes.headers.get('content-type') ?? '');
+}
+
+// Token counts from an OpenAI-format usage block, if there is one.
+function tokensOf(response) {
+  return {
+    tokens_in: response?.usage?.prompt_tokens ?? null,
+    tokens_out: response?.usage?.completion_tokens ?? null,
+  };
 }
 
 // Returns the parsed value, or undefined if the text is not valid JSON.

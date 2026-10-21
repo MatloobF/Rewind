@@ -169,15 +169,6 @@ test('an unreachable upstream gives 502 and a recorded error', async () => {
   }
 });
 
-test('streaming requests are refused before any step is created', async () => {
-  const runId = await newRun();
-  const res = await chat(runId, '{"model":"m","messages":[],"stream":true}');
-  assert.equal(res.status, 400);
-  assert.match((await res.json()).error, /streaming/);
-  assert.equal(received, undefined);
-  assert.equal((await stepsOf(runId)).length, 0);
-});
-
 test('bad bodies and run ids are rejected without calling upstream', async () => {
   const runId = await newRun();
   assert.equal((await chat(runId, '{not json')).status, 400);

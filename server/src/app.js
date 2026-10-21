@@ -26,6 +26,9 @@ export function createApp({ upstreamUrl = DEFAULT_UPSTREAM, serverUrl = DEFAULT_
 
   // Express 5 sends errors thrown in async handlers here.
   app.use((err, req, res, next) => {
+    // Too late for an error status, e.g. a stream already under way: let
+    // Express close the connection.
+    if (res.headersSent) return next(err);
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
     // Bad JSON or a body over the limit, from the body parsers.
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'invalid JSON body' });
