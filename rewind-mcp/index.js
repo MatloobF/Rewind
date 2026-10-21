@@ -10,7 +10,9 @@ import { createRewindServer } from './src/server.js';
 
 const log = (message) => console.error(`[rewind-mcp] ${message}`);
 
-const serverUrl = (process.env.REWIND_SERVER_URL || 'http://localhost:4000').replace(/\/+$/, '');
+const trimSlash = (url) => url.replace(/\/+$/, '');
+const serverUrl = trimSlash(process.env.REWIND_SERVER_URL || 'http://localhost:4000');
+const intelUrl = trimSlash(process.env.INTEL_URL || 'http://localhost:8000');
 
-await createRewindServer({ serverUrl }).connect(new StdioServerTransport());
-log(`ready, reading from ${serverUrl}`);
+await createRewindServer({ serverUrl, intelUrl }).connect(new StdioServerTransport());
+log(`ready, reading from ${serverUrl} (intel: ${intelUrl})`);

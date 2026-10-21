@@ -99,6 +99,20 @@ function toolDetails({ request, response }) {
   };
 }
 
+// A failure pattern from the intel service, without its full member list
+// (every failure in the pattern): the top signatures and a few examples,
+// each with the run_id and idx to look at with get_run.
+export function summarizePattern(pattern) {
+  return {
+    ...pick(pattern, ['id', 'kind', 'label', 'size', 'run_count']),
+    signatures: pattern.signatures.slice(0, 5),
+    examples: pattern.failures.slice(0, 3).map((failure) => ({
+      ...pick(failure, ['run_id', 'run_name', 'idx', 'type', 'tool']),
+      message: clip(failure.message),
+    })),
+  };
+}
+
 // Chat message content is a string, or an array of parts like { type: 'text', text }.
 function messageText(content) {
   if (typeof content === 'string') return content || null;

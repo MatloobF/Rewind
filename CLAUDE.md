@@ -80,14 +80,14 @@ cd examples/agent && npm install                      # sample agent deps (opena
 cd mcp-proxy && npm install                           # MCP proxy deps (MCP SDK); the sample agent launches its tools through it
 cd mcp-proxy && npm test                              # MCP proxy tests (passthrough, recording against a fake API, fail-open, fork replay/override and fail-closed; no Postgres)
 cd rewind-mcp && npm install                          # Rewind MCP server deps (MCP SDK, zod for tool input schemas)
-cd rewind-mcp && npm test                             # Rewind MCP server tests (list_runs, get_run step summaries and clipping, API-down errors, stdio; no Postgres)
+cd rewind-mcp && npm test                             # Rewind MCP server tests (run tools, intel tools, step summaries and clipping, API- and intel-down errors, stdio; fake HTTP services, no Postgres)
 cd examples/agent && npm run seed                     # reset the sandbox to the messy starting files
 cd examples/agent && npm run seed:failures            # record 10 scripted failing runs via the API for the intel service (server must be running; --force to add again)
 cd examples/agent && npm test                         # sample agent tests (safePath, tools, seed, loop, MCP server + client)
 node examples/agent/index.js "sort the files"         # run the sample agent directly (~3 min on CPU)
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)
 node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
-node rewind-mcp/index.js                              # Rewind as a stdio MCP server (tools: list_runs, get_run); reads the API at REWIND_SERVER_URL
+node rewind-mcp/index.js                              # Rewind as a stdio MCP server (tools: list_runs, get_run, get_failure_patterns, get_run_loops); reads REWIND_SERVER_URL and INTEL_URL
 cd server && npm link                                 # once: installs the `rewind` command globally
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run, LLM + tool steps (server must be running)
 rewind eval <eval-id>...                              # run saved evals one at a time, print PASS/FAIL and why; exit 0 only if all pass (server must be running; the agent's output shows in the server's terminal)
@@ -103,7 +103,7 @@ Update this section when scripts are added or renamed.
 - `REWIND_SERVER_URL`: Rewind server URL used by the CLI and MCP proxy, and by the server itself to tell forked agents where it is (default `http://localhost:4000`)
 - `REWIND_RUN_ID`: set by the CLI (or the server, for forks) for each run; used by the MCP proxy
 - `REWIND_BASE_URL`: set by the CLI; the agent uses it as its LLM base URL
-- `INTEL_URL`: Python service URL (default `http://localhost:8000`). Not read yet: the Vite dev proxy sends `/intel` to `:8000` directly. Wire it up when deploying (Phase 10).
+- `INTEL_URL`: Python service URL (default `http://localhost:8000`). Read by the Rewind MCP server (`rewind-mcp`). The web UI doesn't read it yet: the Vite dev proxy sends `/intel` to `:8000` directly. Wire that up when deploying (Phase 10).
 - The intel service reads `DATABASE_URL` from the real environment only, not from `.env` (the Node scripts load `../.env` with `--env-file`). If your `.env` points somewhere other than the default, set it in the shell before starting uvicorn.
 
 Never commit real API keys. Keep secrets in `.env` (gitignored) and document every variable in `.env.example`. Never expose secrets to the frontend: in Vite, any `VITE_` variable is bundled into the browser.

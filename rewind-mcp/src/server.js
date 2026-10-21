@@ -6,9 +6,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getJson } from './api.js';
-import { RUN_FIELDS, pick, summarizeRun } from './summary.js';
+import { RUN_FIELDS, pick, summarizeRun, summarizePattern } from './summary.js';
 
-export function createRewindServer({ serverUrl }) {
+const INTEL = { service: 'Rewind intel service' };
+
+export function createRewindServer({ serverUrl, intelUrl }) {
   const server = new McpServer({ name: 'rewind', version: '0.1.0' });
 
   server.registerTool('list_runs', {
@@ -45,6 +47,39 @@ export function createRewindServer({ serverUrl }) {
     },
   }, ({ run_id }) => toolResult(async () =>
     summarizeRun(await getJson(serverUrl, `/api/runs/${run_id}`))));
+
+  // The intel tools fail on their own: with the intel service down, they
+  // return an error and the run tools above keep working.
+  server.registerTool('get_failure_patterns', {
+    title: 'Get failure patterns',
+    description:
+      'Group the failures across all runs (errored steps, and failed runs) into patterns of similar errors, ' +
+      'biggest first. Each pattern has its most common error signatures and a few example failures with the ' +
+      'run_id and step idx to inspect with get_run. kind "single" means one signature that matched no cluster.',
+    inputSchema: {
+      limit: z.number().int().min(1).max(50).default(10)
+        .describe('Maximum number of patterns to return (1-50, default 10)'),
+    },
+  }, ({ limit }) => toolResult(async () => {
+    // Long timeout: the first call after the intel service starts waits
+    // for its embedding model to load (~17 s).
+    const { patterns } = await getJson(intelUrl, '/failures/clusters', { ...INTEL, timeoutMs: 60_000 });
+    return {
+      total_patterns: patterns.length,
+      patterns: patterns.slice(0, limit).map(summarizePattern),
+    };
+  }));
+
+  server.registerTool('get_run_loops', {
+    title: 'Get run loops',
+    description:
+      'Find loops in one run. kind "tool_cycle": the same sequence of tool calls repeated back to back ' +
+      '(tools, period = calls per cycle, repeats). kind "repeated_llm_request": the identical LLM request sent ' +
+      'more than once. step_idxs are the step idx values in get_run. An empty list means no loops were found.',
+    inputSchema: {
+      run_id: z.guid().describe('The run id, e.g. from list_runs'),
+    },
+  }, ({ run_id }) => toolResult(() => getJson(intelUrl, `/runs/${run_id}/loops`, INTEL)));
 
   return server;
 }
