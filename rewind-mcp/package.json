@@ -1,0 +1,14 @@
+{
+  "name": "rewind-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Rewind as an MCP server: lets an LLM query recorded runs, failures and evals",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "zod": "^4.6.7"
+  }
+}
