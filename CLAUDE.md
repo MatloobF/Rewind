@@ -88,6 +88,8 @@ node examples/agent/index.js "sort the files"         # run the sample agent dir
 node examples/agent/mcp-server.js                     # the file tools as a stdio MCP server (the agent launches it itself)
 node mcp-proxy/index.js -- <command> [args...]        # wrap any stdio MCP server; records tool calls when REWIND_RUN_ID is set
 node rewind-mcp/index.js                              # Rewind as a stdio MCP server (read-only tools: list_runs, get_run, get_failure_patterns, get_run_loops, list_evals, get_eval); reads REWIND_SERVER_URL and INTEL_URL
+claude mcp add rewind -- node C:/Projects/Rewind/rewind-mcp/index.js   # once: register it with Claude Code (local scope); the tools appear in a new session, check with /mcp
+claude mcp remove rewind -s local                     # unregister it (a committed .mcp.json for Claude Code and Cursor is planned for Phase 10)
 cd server && npm link                                 # once: installs the `rewind` command globally
 rewind run --name "test" -- node examples/agent/index.js "sort the files"   # recorded run, LLM + tool steps (server must be running)
 rewind eval <eval-id>...                              # run saved evals one at a time, print PASS/FAIL and why; exit 0 only if all pass (server must be running; the agent's output shows in the server's terminal)
@@ -188,7 +190,7 @@ Work in this order. Each phase should leave the project in a working state.
 - [x] **Phase 5:** Replay and fork engine; fork editor, branch graph, diff view
 - [x] **Phase 6:** Python service: failure clustering, loop detection, failure-patterns dashboard
 - [x] **Phase 7:** Auto-generated evals, `eval_results`, and `rewind eval` runner
-- [ ] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
+- [x] **Phase 8:** Rewind as an MCP server (demo: query it from Claude Code or Cursor)
 - [ ] **Phase 9:** Streaming support and the Anthropic `/v1/messages` route
 - [ ] **Phase 10:** Docker, deploy, README, demo. Headline demo: record Claude Code's LLM calls by pointing `ANTHROPIC_BASE_URL` at the Rewind proxy, so Rewind captures both its LLM and tool calls. (Cursor's own LLM calls go through Cursor's servers and can't be proxied.)
 
