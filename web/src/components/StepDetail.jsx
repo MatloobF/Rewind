@@ -3,7 +3,7 @@ import ForkEditor from './ForkEditor.jsx';
 import JsonView from './JsonView.jsx';
 import Message from './Message.jsx';
 import { formatMs, formatNumber } from '../format.js';
-import { previousMessageCount, replyMessage, stepState } from '../steps.js';
+import { previousMessageCount, replyMessage, requestMessages, stepState } from '../steps.js';
 
 function Section({ title, children }) {
   return (
@@ -94,7 +94,7 @@ export default function StepDetail({ step, steps, run }) {
 // (e.g. tool results), since every LLM request repeats the whole history.
 function Conversation({ step, steps }) {
   const [showAll, setShowAll] = useState(false);
-  const messages = step.request.messages ?? [];
+  const messages = requestMessages(step);
   const firstNew = previousMessageCount(steps, step);
   const shown = showAll ? messages : messages.slice(firstNew);
   const title = showAll

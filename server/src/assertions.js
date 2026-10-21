@@ -18,8 +18,13 @@ const stepList = (steps) => steps.map((s) => s.idx).join(', ');
 
 // The agent's last answer: the message of the last LLM step that finished.
 // Empty if the run ended on a tool call (e.g. it hit its step limit).
+// An Anthropic reply is a list of content blocks; its text blocks are joined.
 export function finalOutput(steps) {
   const last = steps.findLast((s) => s.type === 'llm' && s.response != null);
+  if (last?.format === 'anthropic') {
+    const blocks = Array.isArray(last.response.content) ? last.response.content : [];
+    return blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+  }
   return last?.response?.choices?.[0]?.message?.content ?? '';
 }
 

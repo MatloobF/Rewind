@@ -1,8 +1,9 @@
 // Helpers for reading recorded steps. LLM steps hold OpenAI chat
-// completion bodies; tool steps (Phase 4) hold MCP tool calls.
+// completion or Anthropic message bodies (read through llmFormat.js); tool
+// steps (Phase 4) hold MCP tool calls.
+import { replyMessage, requestMessages } from './llmFormat.js';
 
-// The assistant message an LLM step returned, or null.
-export const replyMessage = (step) => step.response?.choices?.[0]?.message ?? null;
+export { replyMessage, requestMessages };
 
 // 'error' | 'pending' | 'done'. A step with neither response nor error was
 // started but never finished: still in progress if the run is running,
@@ -27,5 +28,6 @@ export function stepSummary(step) {
 // already sent. Everything after that index is new at this step.
 export function previousMessageCount(steps, step) {
   const earlier = steps.filter((s) => s.type === 'llm' && s.idx < step.idx);
-  return earlier.at(-1)?.request.messages?.length ?? 0;
+  const previous = earlier.at(-1);
+  return previous ? requestMessages(previous).length : 0;
 }

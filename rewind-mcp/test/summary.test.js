@@ -6,7 +6,7 @@ import { clip, summarizeRun, summarizeStep } from '../src/summary.js';
 // completion bodies, tool steps hold MCP tool calls.
 function llmStep(idx, message, extra = {}) {
   return {
-    idx, type: 'llm', replayed: false, latency_ms: 1000, tokens_in: 500, tokens_out: 40, error: null,
+    idx, type: 'llm', format: 'openai', replayed: false, latency_ms: 1000, tokens_in: 500, tokens_out: 40, error: null,
     request: {
       model: 'rewind-qwen',
       messages: [
@@ -43,7 +43,7 @@ test('an LLM step with a text reply shows the reply, not the conversation', () =
   const summary = summarizeStep(llmStep(4, { content: 'All files are sorted.' }));
   assert.deepEqual(summary, {
     idx: 4, type: 'llm', replayed: false, latency_ms: 1000, error: null,
-    tokens_in: 500, tokens_out: 40, messages_sent: 2,
+    format: 'openai', tokens_in: 500, tokens_out: 40, messages_sent: 2,
     reply: 'All files are sorted.', tool_calls: [], finish_reason: 'stop',
   });
 });
@@ -53,6 +53,33 @@ test('an LLM step with tool calls shows each call name and arguments', () => {
   assert.equal(summary.reply, null);
   assert.deepEqual(summary.tool_calls, [{ name: 'move_file', arguments: '{"from":"a.png","to":"images/a.png"}' }]);
   assert.equal(summary.finish_reason, 'tool_calls');
+});
+
+test('an Anthropic LLM step is summarized in the same fields', () => {
+  const step = {
+    idx: 0, type: 'llm', format: 'anthropic', replayed: false, latency_ms: 900, tokens_in: 3210, tokens_out: 25, error: null,
+    request: { model: 'claude-test', system: 'You organize files.', messages: [{ role: 'user', content: 'sort the files' }] },
+    response: {
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'Look first.', signature: 's' },
+        { type: 'text', text: 'Listing files.' },
+        { type: 'tool_use', id: 'toolu_1', name: 'list_files', input: { path: '.' } },
+      ],
+      stop_reason: 'tool_use',
+    },
+  };
+  const summary = summarizeStep(step);
+  assert.equal(summary.format, 'anthropic');
+  assert.equal(summary.messages_sent, 1);
+  assert.equal(summary.reply, 'Listing files.');
+  assert.deepEqual(summary.tool_calls, [{ name: 'list_files', arguments: '{"path":"."}' }]);
+  assert.equal(summary.finish_reason, 'tool_use');
+
+  // An Anthropic error body: no reply, no calls, no crash.
+  const failed = summarizeStep({ ...step, response: { type: 'error', error: { message: 'x' } }, error: 'upstream HTTP 400: x' });
+  assert.equal(failed.reply, null);
+  assert.deepEqual(failed.tool_calls, []);
 });
 
 test('a tool step shows the tool, its arguments and its result text', () => {

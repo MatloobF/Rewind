@@ -82,6 +82,23 @@ test('finalOutput is empty when the run ended on a tool call or has no LLM step'
   assert.equal(message({ type: 'final_output_contains', text: 'x' }, run, []), 'final output doesn\'t contain "x"');
 });
 
+test('finalOutput reads the text blocks of an Anthropic reply', () => {
+  const anthropic = (content) => ({ type: 'llm', format: 'anthropic', request: {}, response: { content }, error: null });
+  const s = numbered([
+    anthropic([{ type: 'tool_use', id: 't', name: 'list_files', input: {} }]),
+    tool('list_files'),
+    anthropic([
+      { type: 'thinking', thinking: 'All moved.', signature: 's' },
+      { type: 'text', text: 'All files are' },
+      { type: 'text', text: 'sorted.' },
+    ]),
+  ]);
+  assert.equal(finalOutput(s), 'All files are\nsorted.');
+  assert.equal(message({ type: 'final_output_contains', text: 'SORTED' }, run, s), null);
+  // An Anthropic error body has no content: no output, not a crash.
+  assert.equal(finalOutput([{ ...anthropic(undefined), response: { type: 'error' }, idx: 0 }]), '');
+});
+
 test('several failures are all reported, with their index', () => {
   const assertions = [
     { type: 'run_status', status: 'success' },

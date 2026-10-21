@@ -71,20 +71,41 @@ export function summarizeStep(step) {
     : { ...summary, ...toolDetails(step) };
 }
 
-// LLM steps hold OpenAI chat completion bodies.
-function llmDetails({ request, response, tokens_in, tokens_out }) {
-  const choice = response?.choices?.[0];
-  const message = choice?.message;
+// LLM steps hold OpenAI chat completion or Anthropic message bodies
+// (step.format); both are summarized in the same fields.
+function llmDetails({ format, request, response, tokens_in, tokens_out }) {
   return {
+    format,
     tokens_in,
     tokens_out,
     messages_sent: request?.messages?.length ?? 0,
+    ...(format === 'anthropic' ? anthropicReply(response) : openaiReply(response)),
+  };
+}
+
+function openaiReply(response) {
+  const choice = response?.choices?.[0];
+  const message = choice?.message;
+  return {
     reply: clip(messageText(message?.content)),
     tool_calls: (message?.tool_calls ?? []).map((call) => ({
       name: call.function?.name ?? null,
       arguments: clip(call.function?.arguments),
     })),
     finish_reason: choice?.finish_reason ?? null,
+  };
+}
+
+// An Anthropic reply is a list of content blocks: text, tool_use, thinking...
+// stop_reason is its finish_reason (end_turn, tool_use, max_tokens, ...).
+function anthropicReply(response) {
+  const blocks = Array.isArray(response?.content) ? response.content : [];
+  return {
+    reply: clip(blocksText(blocks)),
+    tool_calls: blocks
+      .filter((block) => block.type === 'tool_use')
+      .map((block) => ({ name: block.name ?? null, arguments: clip(block.input ?? {}) })),
+    finish_reason: response?.stop_reason ?? null,
   };
 }
 

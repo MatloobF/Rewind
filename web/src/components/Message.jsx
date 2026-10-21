@@ -1,4 +1,5 @@
-// One chat message (OpenAI format): its role, text and any tool calls.
+// One chat message (OpenAI format, or Anthropic mapped to it by llmFormat.js):
+// its role, any thinking, its text and any tool calls.
 
 const ROLE_STYLES = {
   system: 'text-amber-300',
@@ -32,6 +33,9 @@ export default function Message({ message }) {
           <span className="ml-2 font-normal normal-case text-zinc-500">{message.tool_call_id}</span>
         )}
       </div>
+      {message.thinking && (
+        <div className="mb-1 whitespace-pre-wrap break-words text-sm italic text-zinc-500">{message.thinking}</div>
+      )}
       {text && <div className="whitespace-pre-wrap break-words text-sm text-zinc-200">{text}</div>}
       {toolCalls?.map((call) => (
         <div key={call.id} className="mt-1 flex gap-2 rounded bg-zinc-900 px-2 py-1 font-mono text-xs">
