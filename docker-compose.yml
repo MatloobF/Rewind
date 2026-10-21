@@ -1,3 +1,8 @@
+# `docker compose up -d` starts Postgres only, for development with the
+# server, intel and web running on the host.
+# `docker compose --profile app up -d --build` starts the whole stack:
+# web UI on http://localhost:8080, server (proxy + API) on :4000, intel on
+# :8000. Stop the host dev servers first: they use the same ports.
 services:
   postgres:
     image: postgres:16
@@ -9,6 +14,51 @@ services:
       - "5432:5432"
     volumes:
       - rewind_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d rewind"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  server:
+    profiles: [app]
+    build: ./server
+    environment:
+      # Inside Docker's network a service is reached by its name.
+      DATABASE_URL: postgres://postgres:rewind@postgres:5432/rewind
+      # Ollama stays on the host.
+      UPSTREAM_URL: http://host.docker.internal:11434
+      ANTHROPIC_UPSTREAM_URL: ${ANTHROPIC_UPSTREAM_URL:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Linux; Docker Desktop has it built in
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  intel:
+    profiles: [app]
+    build: ./intel
+    environment:
+      DATABASE_URL: postgres://postgres:rewind@postgres:5432/rewind
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    profiles: [app]
+    build: ./web
+    environment:
+      REWIND_SERVER_URL: http://server:4000
+      INTEL_URL: http://intel:8000
+    ports:
+      - "8080:80"
+    depends_on:
+      - server
+      - intel
 
 volumes:
   rewind_pg:

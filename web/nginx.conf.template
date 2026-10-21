@@ -1,0 +1,21 @@
+# Filled in at container start from REWIND_SERVER_URL and INTEL_URL
+# (no trailing slashes). Same routes as the Vite dev proxy in vite.config.js.
+server {
+  listen 80;
+  root /usr/share/nginx/html;
+
+  # No path after the host: /api/... is passed on unchanged.
+  location /api/ {
+    proxy_pass ${REWIND_SERVER_URL};
+  }
+
+  # The trailing slash replaces the /intel/ prefix with /, like Vite's rewrite.
+  location /intel/ {
+    proxy_pass ${INTEL_URL}/;
+  }
+
+  # Client-side routes (/runs/<id>, /failures, ...) all load the app.
+  location / {
+    try_files $uri /index.html;
+  }
+}
