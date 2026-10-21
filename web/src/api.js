@@ -1,8 +1,9 @@
 // Small fetch helpers for the Rewind API. Paths are relative because Vite
-// proxies /api to the server in dev.
+// proxies /api to the server in dev. The demo build reads saved files instead.
+import { demoDataUrl, isDemo } from './demo.js';
 
 async function getJson(path) {
-  const res = await fetch(path);
+  const res = await fetch(isDemo ? demoDataUrl(path) : path);
   const body = await res.json().catch(() => null);
   // The API answers errors with { error: message }; FastAPI (intel) with { detail }.
   if (!res.ok) throw new Error(body?.error ?? body?.detail ?? `HTTP ${res.status}`);
@@ -18,6 +19,7 @@ export const fetchFailurePatterns = () => getJson('/intel/failures/clusters');
 export const fetchRunLoops = (id) => getJson(`/intel/runs/${id}/loops`);
 
 async function postJson(path, body) {
+  if (isDemo) throw new Error('this is a read-only demo');
   const res = await fetch(path, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useParams, useSearchParams } from 'react-router';
 import { fetchRun } from '../api.js';
+import { isDemo } from '../demo.js';
 import BranchGraph from '../components/BranchGraph.jsx';
 import EvalEditor from '../components/EvalEditor.jsx';
 import LoopWarning from '../components/LoopWarning.jsx';
@@ -47,7 +48,7 @@ export default function RunPage() {
         {run.diverged_at_step != null && (
           <span className="text-sm text-amber-300">diverged at step {run.diverged_at_step}</span>
         )}
-        {!creatingEval && (
+        {!creatingEval && !isDemo && (
           <button
             type="button"
             onClick={() => setEvalPanelFor(id)}

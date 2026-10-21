@@ -1,4 +1,5 @@
 import { Link, NavLink, Route, Routes } from 'react-router';
+import { isDemo, REPO_URL } from './demo.js';
 import EvalList from './pages/EvalList.jsx';
 import EvalPage from './pages/EvalPage.jsx';
 import Failures from './pages/Failures.jsx';
@@ -29,6 +30,17 @@ export default function App() {
           </nav>
         </div>
       </header>
+      {isDemo && (
+        <div className="border-b border-amber-500/30 bg-amber-500/10 text-sm text-amber-200">
+          <div className="mx-auto max-w-6xl px-6 py-2">
+            Read-only demo: a snapshot of recorded runs. Recording, forking and evals need a local install,{' '}
+            <a href={REPO_URL} className="underline hover:text-amber-100">
+              see the README
+            </a>
+            .
+          </div>
+        </div>
+      )}
       <main className="mx-auto max-w-6xl px-6 py-6">
         <Routes>
           <Route path="/" element={<RunList />} />

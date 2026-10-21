@@ -2,6 +2,7 @@ import { useState } from 'react';
 import ForkEditor from './ForkEditor.jsx';
 import JsonView from './JsonView.jsx';
 import Message from './Message.jsx';
+import { isDemo } from '../demo.js';
 import { formatMs, formatNumber } from '../format.js';
 import { previousMessageCount, replyMessage, requestMessages, stepState } from '../steps.js';
 
@@ -30,7 +31,7 @@ export default function StepDetail({ step, steps, run }) {
           {formatMs(step.latency_ms)} · {formatNumber(step.tokens_in)} in / {formatNumber(step.tokens_out)} out
         </span>
         {step.replayed && <span className="text-sm text-violet-300">replayed from parent run</span>}
-        {!forking && (
+        {!forking && !isDemo && (
           <button
             type="button"
             onClick={() => setForking(true)}

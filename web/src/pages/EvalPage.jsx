@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router';
 import { fetchEval, runEval } from '../api.js';
+import { isDemo } from '../demo.js';
 import StatusBadge from '../components/StatusBadge.jsx';
 import VerdictBadge from '../components/VerdictBadge.jsx';
 import { describeAssertion } from '../evals.js';
@@ -42,15 +43,17 @@ export default function EvalPage() {
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">{ev.input_task}</h1>
         <VerdictBadge result={ev.results[0] ?? null} />
-        <button
-          type="button"
-          onClick={() => run.mutate()}
-          disabled={inProgress || run.isPending}
-          title={inProgress ? 'Wait for the current run to be checked' : 'Run the command live and check the assertions'}
-          className="ml-auto rounded bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
-        >
-          {run.isPending ? 'Starting...' : 'Run eval'}
-        </button>
+        {!isDemo && (
+          <button
+            type="button"
+            onClick={() => run.mutate()}
+            disabled={inProgress || run.isPending}
+            title={inProgress ? 'Wait for the current run to be checked' : 'Run the command live and check the assertions'}
+            className="ml-auto rounded bg-emerald-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {run.isPending ? 'Starting...' : 'Run eval'}
+          </button>
+        )}
       </div>
       {run.error && <p className="mt-2 text-sm text-rose-300">Could not start: {run.error.message}</p>}
 
